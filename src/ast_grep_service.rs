@@ -59,9 +59,7 @@ impl fmt::Display for ServiceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ServiceError::Io(e) => write!(f, "IO error: {}", e),
-            ServiceError::SerdeJson(e) => {
-                write!(f, "JSON serialization/deserialization error: {}", e)
-            }
+            ServiceError::SerdeJson(e) => write!(f, "JSON error: {}", e),
             ServiceError::ParserError(e) => write!(f, "Parser error: {}", e),
             ServiceError::Glob(e) => write!(f, "Glob error: {}", e),
             ServiceError::ToolNotFound(tool) => write!(f, "Tool not found: {}", tool),

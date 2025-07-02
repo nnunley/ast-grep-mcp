@@ -332,3 +332,44 @@ function greet() {
     let result = service.file_search(param).await.unwrap();
     assert_eq!(result.file_results.len(), 0); // No matches found
 }
+
+#[tokio::test]
+async fn test_replace_string_literal_to_into() {
+    let temp_dir = TempDir::new().unwrap();
+    let config = ServiceConfig {
+        root_directories: vec![temp_dir.path().to_path_buf()],
+        ..Default::default()
+    };
+    let service = AstGrepService::with_config(config);
+
+    let rust_file_path = temp_dir.path().join("test_replace.rs");
+    fs::write(
+        &rust_file_path,
+        r#"
+fn main() {
+    let message = "Hello".to_string();
+    let another_message = "World".to_string();
+    println!("{}", message);
+}
+"#,
+    )
+    .unwrap();
+
+    let param = FileReplaceParam {
+        path_pattern: "**/*.rs".to_string(),
+        pattern: "$VAR.to_string()".to_string(),
+        replacement: "$VAR.into()".to_string(),
+        language: "rust".to_string(),
+        dry_run: false, // Apply the changes
+        ..Default::default()
+    };
+
+    let result = service.file_replace(param).await.unwrap();
+    assert_eq!(result.file_results.len(), 1);
+    assert!(!result.dry_run);
+
+    let modified_content = fs::read_to_string(&rust_file_path).unwrap();
+    assert!(modified_content.contains("let message = \"Hello\".into();"));
+    assert!(modified_content.contains("let another_message = \"World\".into();"));
+    assert!(!modified_content.contains(".to_string()"));
+}
