@@ -1,4 +1,3 @@
-
 use anyhow::Result;
 use rmcp::{ServiceExt, transport::stdio};
 use tracing_subscriber::{self, filter::EnvFilter};
@@ -18,9 +17,12 @@ async fn main() -> Result<()> {
     tracing::info!("Starting MCP server");
 
     // Create an instance of our ast-grep service
-    let service = AstGrepService::new().serve(stdio()).await.inspect_err(|e| {
-        tracing::error!("serving error: {:?}", e);
-    })?;
+    let service = AstGrepService::new()
+        .serve(stdio())
+        .await
+        .inspect_err(|e| {
+            tracing::error!("serving error: {:?}", e);
+        })?;
 
     service.waiting().await?;
     Ok(())
