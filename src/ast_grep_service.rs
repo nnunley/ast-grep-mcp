@@ -1118,13 +1118,13 @@ impl ServerHandler for AstGrepService {
         Ok(ListToolsResult {
             tools: vec![
                 Tool {
-                    name: "search".to_string().into(),
-                    description: "Search for patterns in code using ast-grep.".to_string().into(),
+                    name: "search".into(),
+                    description: "Search for patterns in code using ast-grep.".into(),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({ "type": "object", "properties": { "code": { "type": "string" }, "pattern": { "type": "string" }, "language": { "type": "string" } } })).unwrap()),
                 },
                 Tool {
-                    name: "file_search".to_string().into(),
-                    description: "Search for patterns in a file using ast-grep.".to_string().into(),
+                    name: "file_search".into(),
+                    description: "Search for patterns in a file using ast-grep.".into(),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({
                         "type": "object",
                         "properties": {
@@ -1146,13 +1146,13 @@ impl ServerHandler for AstGrepService {
                     })).unwrap()),
                 },
                 Tool {
-                    name: "replace".to_string().into(),
-                    description: "Replace patterns in code.".to_string().into(),
+                    name: "replace".into(),
+                    description: "Replace patterns in code.".into(),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({ "type": "object", "properties": { "code": { "type": "string" }, "pattern": { "type": "string" }, "replacement": { "type": "string" }, "language": { "type": "string" } } })).unwrap()),
                 },
                 Tool {
-                    name: "file_replace".to_string().into(),
-                    description: "Replace patterns in files. Returns line diffs. Use dry_run=false to actually modify files.".to_string().into(),
+                    name: "file_replace".into(),
+                    description: "Replace patterns in files. Returns line diffs. Use dry_run=false to actually modify files.".into(),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({
                         "type": "object",
                         "properties": {
@@ -1176,13 +1176,13 @@ impl ServerHandler for AstGrepService {
                     })).unwrap()),
                 },
                 Tool {
-                    name: "list_languages".to_string().into(),
-                    description: "List all supported programming languages.".to_string().into(),
+                    name: "list_languages".into(),
+                    description: "List all supported programming languages.".into(),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({ "type": "object", "properties": {} })).unwrap()),
                 },
                 Tool {
-                    name: "documentation".to_string().into(),
-                    description: "Provides detailed usage examples for all tools.".to_string().into(),
+                    name: "documentation".into(),
+                    description: "Provides detailed usage examples for all tools.".into(),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({ "type": "object", "properties": {} })).unwrap()),
                 },
                 ],
