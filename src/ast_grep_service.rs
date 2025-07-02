@@ -110,7 +110,7 @@ impl From<ServiceError> for ErrorData {
 impl AstGrepService {
     fn parse_language(&self, lang_str: &str) -> Result<Language, ServiceError> {
         Language::from_str(lang_str)
-            .map_err(|_| ServiceError::Internal("Failed to parse language".to_string()))
+            .map_err(|_| ServiceError::Internal("Failed to parse language".into()))
     }
 
     pub fn new() -> Self {
