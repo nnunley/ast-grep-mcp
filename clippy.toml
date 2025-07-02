@@ -1,0 +1,5 @@
+# Clippy configuration
+warn-on-all-wildcard-imports = true
+disallowed-methods = [
+    "std::env::set_var", # Use proper configuration instead
+]
