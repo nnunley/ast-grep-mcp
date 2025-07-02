@@ -1,0 +1,36 @@
+[package]
+name = "ast-grep-mcp"
+version = "0.1.0"
+edition = "2024"
+authors = ["Norman Nunley Jr <nnunley@gmail.com>"]
+description = "Model Context Protocol (MCP) server for ast-grep - structural code search and transformation"
+repository = "https://github.com/nnunley/ast-grep-mcp"
+license = "MIT"
+keywords = ["ast-grep", "mcp", "code-search", "refactoring", "tree-sitter"]
+categories = ["development-tools", "text-processing"]
+readme = "README.md"
+
+[lib]
+name = "ast_grep_mcp"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1.0.98"
+ast-grep-core = "0.38.6"
+ast-grep-language = "0.38.6"
+async-trait = "0.1.88"
+globset = "0.4.16"
+rmcp = { version = "0.1.5", features = ["macros", "transport-io"] }
+rmcp-macros = { version = "0.1.5" }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+tokio = { version = "1.45.1", features = ["fs", "full"] }
+futures = "0.3"
+base64 = "0.22"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+walkdir = "2.5.0"
+
+[dev-dependencies]
+tokio-test = "0.4"
+tempfile = "3.8"
