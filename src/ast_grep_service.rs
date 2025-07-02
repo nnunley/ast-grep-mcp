@@ -1,5 +1,4 @@
 use std::{borrow::Cow, collections::HashMap, fmt, io, path::PathBuf, str::FromStr, sync::Arc};
-use sha2::{Sha256, Digest};
 
 use ast_grep_core::{AstGrep, Pattern};
 use ast_grep_language::SupportLang as Language;
@@ -15,6 +14,7 @@ use rmcp::{
     service::{RequestContext, RoleServer},
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
 #[derive(Debug, Clone)]
@@ -24,7 +24,7 @@ pub struct ServiceConfig {
     /// Maximum number of concurrent file operations
     pub max_concurrency: usize,
     /// Maximum number of results to return per search
-    pub max_results: usize,
+    pub limit: usize,
     /// Root directories for file search (defaults to current working directory)
     pub root_directories: Vec<PathBuf>,
 }
@@ -34,7 +34,7 @@ impl Default for ServiceConfig {
         Self {
             max_file_size: 50 * 1024 * 1024, // 50MB
             max_concurrency: 10,
-            max_results: 1000,
+            limit: 100,
             root_directories: vec![std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))],
         }
     }
@@ -108,6 +108,11 @@ impl From<ServiceError> for ErrorData {
 }
 
 impl AstGrepService {
+    fn parse_language(&self, lang_str: &str) -> Result<Language, ServiceError> {
+        Language::from_str(lang_str)
+            .map_err(|_| ServiceError::Internal("Failed to parse language".to_string()))
+    }
+
     pub fn new() -> Self {
         Self {
             config: ServiceConfig::default(),
@@ -126,8 +131,7 @@ impl AstGrepService {
     }
 
     pub async fn search(&self, param: SearchParam) -> Result<SearchResult, ServiceError> {
-        let lang = Language::from_str(param.language.as_str())
-            .map_err(|_| ServiceError::Internal("Failed to parse language".to_string()))?;
+        let lang = self.parse_language(param.language.as_str())?;
 
         let ast = AstGrep::new(param.code.as_str(), lang);
         let pattern = Pattern::new(param.pattern.as_str(), lang);
@@ -151,15 +155,14 @@ impl AstGrepService {
         &self,
         param: FileSearchParam,
     ) -> Result<FileSearchResult, ServiceError> {
-        let lang = Language::from_str(param.language.as_str())
-            .map_err(|_| ServiceError::Internal("Failed to parse language".to_string()))?;
+        let lang = self.parse_language(param.language.as_str())?;
 
         let mut builder = GlobSetBuilder::new();
         builder.add(Glob::new(&param.path_pattern)?);
         let globset = builder.build()?;
 
         let max_file_size = param.max_file_size.unwrap_or(self.config.max_file_size);
-        let max_results = param.max_results.unwrap_or(self.config.max_results);
+        let max_results = param.limit.unwrap_or(self.config.limit);
 
         // Determine cursor position for pagination
         let cursor_path = if let Some(cursor) = &param.cursor {
@@ -177,7 +180,9 @@ impl AstGrepService {
         };
 
         // Collect all matching file paths from all root directories, sorted for consistent pagination
-        let mut all_matching_files: Vec<_> = self.config.root_directories
+        let mut all_matching_files: Vec<_> = self
+            .config
+            .root_directories
             .iter()
             .flat_map(|root_dir| {
                 WalkDir::new(root_dir)
@@ -248,7 +253,6 @@ impl AstGrepService {
                         }
                     }
                 })
-                .take(max_results)
                 .collect::<Vec<_>>()
                 .await;
 
@@ -310,8 +314,7 @@ impl AstGrepService {
     }
 
     pub async fn replace(&self, param: ReplaceParam) -> Result<ReplaceResult, ServiceError> {
-        let lang = Language::from_str(param.language.as_str())
-            .map_err(|_| ServiceError::Internal("Failed to parse language".to_string()))?;
+        let lang = self.parse_language(param.language.as_str())?;
 
         let mut ast = AstGrep::new(param.code.as_str(), lang);
         let pattern = Pattern::new(param.pattern.as_str(), lang);
@@ -319,15 +322,14 @@ impl AstGrepService {
 
         // Find all matches and replace them manually
         let mut changed = true;
-        let mut iterations = 0;
-        while changed && iterations < 100 { // Safety limit to prevent infinite loops
+        while changed {
+            // Safety limit to prevent infinite loops
             changed = false;
             if let Some(_node) = ast.root().find(pattern.clone()) {
                 if ast.replace(pattern.clone(), replacement).is_ok() {
                     changed = true;
                 }
             }
-            iterations += 1;
         }
         let rewritten_code = ast.root().text().to_string();
 
@@ -338,15 +340,14 @@ impl AstGrepService {
         &self,
         param: FileReplaceParam,
     ) -> Result<FileReplaceResult, ServiceError> {
-        let lang = Language::from_str(param.language.as_str())
-            .map_err(|_| ServiceError::Internal("Failed to parse language".to_string()))?;
+        let lang = self.parse_language(param.language.as_str())?;
 
         let mut builder = GlobSetBuilder::new();
         builder.add(Glob::new(&param.path_pattern)?);
         let globset = builder.build()?;
 
         let max_file_size = param.max_file_size.unwrap_or(self.config.max_file_size);
-        let max_results = param.max_results.unwrap_or(self.config.max_results);
+        let max_results = param.max_results.unwrap_or(self.config.limit);
 
         // Determine cursor position for pagination
         let cursor_path = if let Some(cursor) = &param.cursor {
@@ -364,7 +365,9 @@ impl AstGrepService {
         };
 
         // Collect all matching file paths from all root directories, sorted for consistent pagination
-        let mut all_matching_files: Vec<_> = self.config.root_directories
+        let mut all_matching_files: Vec<_> = self
+            .config
+            .root_directories
             .iter()
             .flat_map(|root_dir| {
                 WalkDir::new(root_dir)
@@ -401,10 +404,9 @@ impl AstGrepService {
             all_matching_files
                 .into_iter()
                 .skip_while(|path| path.to_string_lossy().as_ref() <= cursor_path.as_str())
-                .take(max_results)
                 .collect()
         } else {
-            all_matching_files.into_iter().take(max_results).collect()
+            all_matching_files.into_iter().collect()
         };
 
         // Process files in parallel
@@ -417,10 +419,73 @@ impl AstGrepService {
                     let pattern_str = pattern_str.clone();
                     let replacement_str = replacement_str.clone();
                     async move {
-                        let result = self
-                            .replace_single_file(path.clone(), pattern_str, replacement_str, lang, dry_run)
-                            .await;
-                        (path, result)
+                        let file_content = match tokio::fs::read_to_string(&path).await {
+                            Ok(content) => content,
+                            Err(e) => return (path, Err(ServiceError::Io(e))),
+                        };
+                        let original_lines: Vec<&str> = file_content.lines().collect();
+
+                        let mut ast = AstGrep::new(file_content.as_str(), lang);
+                        let pattern = Pattern::new(pattern_str.as_str(), lang);
+                        let replacement = replacement_str.as_str();
+
+                        let mut changed = true;
+                        let mut iterations = 0;
+                        while changed && iterations < 100 {
+                            changed = false;
+                            if let Some(_node) = ast.root().find(pattern.clone()) {
+                                if ast.replace(pattern.clone(), replacement).is_ok() {
+                                    changed = true;
+                                }
+                            }
+                            iterations += 1;
+                        }
+
+                        let rewritten_content = ast.root().text().to_string();
+
+                        if rewritten_content == file_content {
+                            return (path, Ok(None));
+                        }
+
+                        let new_lines: Vec<&str> = rewritten_content.lines().collect();
+                        let mut changes = Vec::new();
+
+                        let max_len = original_lines.len().max(new_lines.len());
+                        for i in 0..max_len {
+                            let old_line = original_lines.get(i).unwrap_or(&"");
+                            let new_line = new_lines.get(i).unwrap_or(&"");
+
+                            if old_line != new_line {
+                                changes.push(FileDiffChange {
+                                    line: i + 1,
+                                    old_text: old_line.to_string(),
+                                    new_text: new_line.to_string(),
+                                });
+                            }
+                        }
+
+                        if !dry_run && !changes.is_empty() {
+                            if let Err(e) = tokio::fs::write(&path, rewritten_content).await {
+                                return (path, Err(ServiceError::Io(e)));
+                            }
+                        }
+
+                        let file_metadata = match tokio::fs::metadata(&path).await {
+                            Ok(metadata) => metadata,
+                            Err(e) => return (path, Err(ServiceError::Io(e))),
+                        };
+
+                        let total_changes = changes.len();
+                        (
+                            path.clone(),
+                            Ok(Some(FileDiffResult {
+                                file_path: path.clone(),
+                                file_size_bytes: file_metadata.len(),
+                                changes,
+                                total_changes,
+                                file_hash: Self::calculate_file_hash(&file_content),
+                            })),
+                        )
                     }
                 })
                 .buffer_unordered(self.config.max_concurrency)
@@ -437,7 +502,6 @@ impl AstGrepService {
                 .collect::<Vec<_>>()
                 .await;
 
-        // Determine next cursor
         let next_cursor = if files_to_process.len() < max_results {
             Some(SearchCursor::complete())
         } else if let Some((last_path, _)) = file_results_raw.last() {
@@ -448,7 +512,6 @@ impl AstGrepService {
             Some(SearchCursor::complete())
         };
 
-        // Extract just the file results
         let file_results: Vec<FileDiffResult> = file_results_raw
             .into_iter()
             .map(|(_, result)| result)
@@ -460,76 +523,6 @@ impl AstGrepService {
             total_files_found,
             dry_run: param.dry_run,
         })
-    }
-
-    async fn replace_single_file(
-        &self,
-        path: PathBuf,
-        pattern_str: String,
-        replacement_str: String,
-        lang: Language,
-        dry_run: bool,
-    ) -> Result<Option<FileDiffResult>, ServiceError> {
-        let file_content = tokio::fs::read_to_string(&path).await?;
-        let original_lines: Vec<&str> = file_content.lines().collect();
-
-        let mut ast = AstGrep::new(file_content.as_str(), lang);
-        let pattern = Pattern::new(pattern_str.as_str(), lang);
-        let replacement = replacement_str.as_str();
-
-        // Replace all occurrences, not just the first one
-        let mut changed = true;
-        let mut iterations = 0;
-        while changed && iterations < 100 { // Safety limit to prevent infinite loops
-            changed = false;
-            if let Some(_node) = ast.root().find(pattern.clone()) {
-                if ast.replace(pattern.clone(), replacement).is_ok() {
-                    changed = true;
-                }
-            }
-            iterations += 1;
-        }
-        
-        let rewritten_content = ast.root().text().to_string();
-        
-        // Only proceed if there were actual changes
-        if rewritten_content == file_content {
-            return Ok(None);
-        }
-
-        let new_lines: Vec<&str> = rewritten_content.lines().collect();
-        let mut changes = Vec::new();
-
-        // Create line-by-line diff
-        let max_len = original_lines.len().max(new_lines.len());
-        for i in 0..max_len {
-            let old_line = original_lines.get(i).unwrap_or(&"");
-            let new_line = new_lines.get(i).unwrap_or(&"");
-            
-            if old_line != new_line {
-                changes.push(FileDiffChange {
-                    line: i + 1, // 1-based line numbers
-                    old_text: old_line.to_string(),
-                    new_text: new_line.to_string(),
-                });
-            }
-        }
-
-        // If not dry run, actually write the changes
-        if !dry_run && !changes.is_empty() {
-            tokio::fs::write(&path, rewritten_content).await?;
-        }
-
-        let file_metadata = tokio::fs::metadata(&path).await?;
-        
-        let total_changes = changes.len();
-        Ok(Some(FileDiffResult {
-            file_path: path,
-            file_size_bytes: file_metadata.len(),
-            changes,
-            total_changes,
-            file_hash: Self::calculate_file_hash(&file_content),
-        }))
     }
 
     pub async fn list_languages(
@@ -985,7 +978,7 @@ pub struct FileSearchParam {
     pub pattern: String,
     pub language: String,
     #[serde(default)]
-    pub max_results: Option<usize>,
+    pub limit: Option<usize>,
     #[serde(default)]
     pub max_file_size: Option<u64>,
     /// Continuation token from previous search
@@ -1318,10 +1311,7 @@ mod tests {
 
         let result = service.search(param).await;
         assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            ServiceError::Internal(_)
-        ));
+        assert!(matches!(result.unwrap_err(), ServiceError::Internal(_)));
     }
 
     #[tokio::test]
@@ -1353,6 +1343,22 @@ mod tests {
         assert!(result.rewritten_code.contains("let x = 5"));
         assert!(result.rewritten_code.contains("let y = 10"));
         assert!(!result.rewritten_code.contains("const"));
+    }
+
+    #[tokio::test]
+    async fn test_replace_multiple_occurrences() {
+        let service = AstGrepService::new();
+        let param = ReplaceParam {
+            code: "let a = 1; let b = 2; let c = 3;".to_string(),
+            pattern: "let $VAR = $VAL".to_string(),
+            replacement: "const $VAR = $VAL".to_string(),
+            language: "javascript".to_string(),
+        };
+        let result = service.replace(param).await.unwrap();
+        assert_eq!(
+            result.rewritten_code,
+            "const a = 1; const b = 2; const c = 3;"
+        );
     }
 
     #[tokio::test]
@@ -1405,14 +1411,14 @@ mod tests {
         let custom_config = ServiceConfig {
             max_file_size: 1024 * 1024, // 1MB
             max_concurrency: 5,
-            max_results: 10,
+            limit: 10,
             root_directories: vec![std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))],
         };
 
         let service = AstGrepService::with_config(custom_config);
         assert_eq!(service.config.max_file_size, 1024 * 1024);
         assert_eq!(service.config.max_concurrency, 5);
-        assert_eq!(service.config.max_results, 10);
+        assert_eq!(service.config.limit, 10);
     }
 
     #[tokio::test]
@@ -1473,5 +1479,19 @@ mod tests {
         assert_eq!(result.matches[1].vars.get("NAME"), Some(&"add".to_string()));
         assert_eq!(result.matches[1].vars.get("PARAM1"), Some(&"x".to_string()));
         assert_eq!(result.matches[1].vars.get("PARAM2"), Some(&"y".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_invalid_language_error() {
+        let service = AstGrepService::new();
+        let param = SearchParam {
+            code: "let x = 1;".to_string(),
+            pattern: "let x = 1;".to_string(),
+            language: "not_a_real_language".to_string(),
+        };
+        let result = service.search(param).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, ServiceError::Internal(msg) if msg == "Failed to parse language"));
     }
 }

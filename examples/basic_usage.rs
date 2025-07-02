@@ -4,15 +4,15 @@ use ast_grep_mcp::ast_grep_service::{AstGrepService, SearchParam};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let service = AstGrepService::new();
-    
+
     let param = SearchParam {
         code: "function greet() { console.log('Hello!'); }".to_string(),
         pattern: "console.log($VAR)".to_string(),
         language: "javascript".to_string(),
     };
-    
+
     let result = service.search(param).await?;
-    
+
     println!("Found {} matches:", result.matches.len());
     for (i, match_result) in result.matches.iter().enumerate() {
         println!("  {}. {}", i + 1, match_result.text);
@@ -20,6 +20,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("     ${} = {}", var, value);
         }
     }
-    
+
     Ok(())
 }
