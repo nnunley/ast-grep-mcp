@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::HashMap, fmt, io, path::PathBuf, str::FromStr, sync::Arc};
+use std::{borrow::Cow, collections::HashMap, fmt, io, path::PathBuf, str::FromStr, sync::Arc, sync::Mutex};
 
 use ast_grep_core::{AstGrep, Pattern};
 use ast_grep_language::SupportLang as Language;
@@ -43,6 +43,7 @@ impl Default for ServiceConfig {
 #[derive(Clone)]
 pub struct AstGrepService {
     config: ServiceConfig,
+    pattern_cache: Arc<Mutex<HashMap<String, Pattern>>>,
 }
 
 #[derive(Debug)]
@@ -114,12 +115,16 @@ impl AstGrepService {
     pub fn new() -> Self {
         Self {
             config: ServiceConfig::default(),
+            pattern_cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
     #[allow(dead_code)]
     pub fn with_config(config: ServiceConfig) -> Self {
-        Self { config }
+        Self { 
+            config,
+            pattern_cache: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 
     fn calculate_file_hash(content: &str) -> String {
@@ -128,11 +133,37 @@ impl AstGrepService {
         format!("sha256:{}", hex::encode(hasher.finalize()))
     }
 
+    fn get_or_create_pattern(&self, pattern_str: &str, lang: Language) -> Result<Pattern, ServiceError> {
+        let cache_key = format!("{}:{}", lang as u8, pattern_str);
+        
+        // First try to get from cache
+        if let Ok(cache) = self.pattern_cache.lock() {
+            if let Some(pattern) = cache.get(&cache_key) {
+                return Ok(pattern.clone());
+            }
+        }
+
+        // Pattern not in cache, create it
+        let pattern = Pattern::new(pattern_str, lang);
+        
+        // Try to add to cache (ignore if lock fails)
+        if let Ok(mut cache) = self.pattern_cache.lock() {
+            // Limit cache size to prevent memory bloat
+            if cache.len() >= 1000 {
+                cache.clear();
+            }
+            cache.insert(cache_key, pattern.clone());
+        }
+
+        Ok(pattern)
+    }
+
+    #[tracing::instrument(skip(self), fields(language = %param.language, pattern = %param.pattern))]
     pub async fn search(&self, param: SearchParam) -> Result<SearchResult, ServiceError> {
         let lang = self.parse_language(param.language.as_str())?;
 
         let ast = AstGrep::new(param.code.as_str(), lang);
-        let pattern = Pattern::new(param.pattern.as_str(), lang);
+        let pattern = self.get_or_create_pattern(&param.pattern, lang)?;
 
         let matches: Vec<MatchResult> = ast
             .root()
@@ -146,9 +177,11 @@ impl AstGrepService {
             })
             .collect();
 
+        tracing::Span::current().record("matches_found", matches.len());
         Ok(SearchResult { matches })
     }
 
+    #[tracing::instrument(skip(self), fields(language = %param.language, pattern = %param.pattern, path_pattern = %param.path_pattern))]
     pub async fn file_search(
         &self,
         param: FileSearchParam,
@@ -194,10 +227,11 @@ impl AstGrepService {
                         // Check file size
                         if let Ok(metadata) = entry.metadata() {
                             if metadata.len() > max_file_size {
-                                tracing::warn!(
-                                    "Skipping large file: {:?} ({}MB)",
-                                    entry.path(),
-                                    metadata.len() / (1024 * 1024)
+                                tracing::event!(
+                                    tracing::Level::WARN,
+                                    file_path = ?entry.path(),
+                                    file_size_mb = metadata.len() / (1024 * 1024),
+                                    "Skipping large file"
                                 );
                                 return false;
                             }
@@ -212,6 +246,7 @@ impl AstGrepService {
         // Sort for consistent ordering across pagination requests
         all_matching_files.sort();
         let total_files_found = all_matching_files.len();
+        tracing::Span::current().record("total_files_found", total_files_found);
 
         // Apply cursor-based filtering
         let files_to_process: Vec<_> = if let Some(cursor_path) = cursor_path {
@@ -246,7 +281,12 @@ impl AstGrepService {
                         Ok(Some(file_result)) => Some((path, file_result)),
                         Ok(None) => None,
                         Err(e) => {
-                            tracing::warn!("Error processing file {:?}: {}", path, e);
+                            tracing::event!(
+                                tracing::Level::WARN,
+                                file_path = ?path,
+                                error = %e,
+                                "Error processing file"
+                            );
                             None
                         }
                     }
@@ -271,6 +311,7 @@ impl AstGrepService {
             .map(|(_, result)| result)
             .collect();
 
+        tracing::Span::current().record("files_with_matches", file_results.len());
         Ok(FileSearchResult {
             file_results,
             next_cursor,
@@ -287,7 +328,7 @@ impl AstGrepService {
         let file_content = tokio::fs::read_to_string(&path).await?;
 
         let ast = AstGrep::new(file_content.as_str(), lang);
-        let pattern = Pattern::new(pattern_str.as_str(), lang);
+        let pattern = self.get_or_create_pattern(&pattern_str, lang)?;
 
         let matches: Vec<MatchResult> = ast
             .root()
@@ -311,11 +352,12 @@ impl AstGrepService {
         }
     }
 
+    #[tracing::instrument(skip(self), fields(language = %param.language, pattern = %param.pattern, replacement = %param.replacement))]
     pub async fn replace(&self, param: ReplaceParam) -> Result<ReplaceResult, ServiceError> {
         let lang = self.parse_language(param.language.as_str())?;
 
         let mut ast = AstGrep::new(param.code.as_str(), lang);
-        let pattern = Pattern::new(param.pattern.as_str(), lang);
+        let pattern = self.get_or_create_pattern(&param.pattern, lang)?;
         let replacement = param.replacement.as_str();
 
         // Find all matches and replace them manually
@@ -334,6 +376,7 @@ impl AstGrepService {
         Ok(ReplaceResult { rewritten_code })
     }
 
+    #[tracing::instrument(skip(self), fields(language = %param.language, pattern = %param.pattern, replacement = %param.replacement, path_pattern = %param.path_pattern, dry_run = %param.dry_run, summary_only = %param.summary_only))]
     pub async fn file_replace(
         &self,
         param: FileReplaceParam,
@@ -352,9 +395,12 @@ impl AstGrepService {
             if cursor.is_complete {
                 return Ok(FileReplaceResult {
                     file_results: vec![],
+                    summary_results: vec![],
                     next_cursor: Some(SearchCursor::complete()),
                     total_files_found: 0,
                     dry_run: param.dry_run,
+                    total_changes: 0,
+                    files_with_changes: vec![],
                 });
             }
             Some(cursor.decode_path()?)
@@ -379,10 +425,11 @@ impl AstGrepService {
                         // Check file size
                         if let Ok(metadata) = entry.metadata() {
                             if metadata.len() > max_file_size {
-                                tracing::warn!(
-                                    "Skipping large file: {:?} ({}MB)",
-                                    entry.path(),
-                                    metadata.len() / (1024 * 1024)
+                                tracing::event!(
+                                    tracing::Level::WARN,
+                                    file_path = ?entry.path(),
+                                    file_size_mb = metadata.len() / (1024 * 1024),
+                                    "Skipping large file"
                                 );
                                 return false;
                             }
@@ -411,11 +458,12 @@ impl AstGrepService {
         let pattern_str = param.pattern.clone();
         let replacement_str = param.replacement.clone();
         let dry_run = param.dry_run;
+        let pattern = self.get_or_create_pattern(&pattern_str, lang)?;
         let file_results_raw: Vec<(PathBuf, FileDiffResult)> =
             stream::iter(files_to_process.iter().cloned())
                 .map(|path| {
-                    let pattern_str = pattern_str.clone();
                     let replacement_str = replacement_str.clone();
+                    let pattern = pattern.clone();
                     async move {
                         let file_content = match tokio::fs::read_to_string(&path).await {
                             Ok(content) => content,
@@ -424,7 +472,6 @@ impl AstGrepService {
                         let original_lines: Vec<&str> = file_content.lines().collect();
 
                         let mut ast = AstGrep::new(file_content.as_str(), lang);
-                        let pattern = Pattern::new(pattern_str.as_str(), lang);
                         let replacement = replacement_str.as_str();
 
                         let mut changed = true;
@@ -492,7 +539,12 @@ impl AstGrepService {
                         Ok(Some(file_result)) => Some((path, file_result)),
                         Ok(None) => None,
                         Err(e) => {
-                            tracing::warn!("Error processing file {:?}: {}", path, e);
+                            tracing::event!(
+                                tracing::Level::WARN,
+                                file_path = ?path,
+                                error = %e,
+                                "Error processing file"
+                            );
                             None
                         }
                     }
@@ -515,14 +567,61 @@ impl AstGrepService {
             .map(|(_, result)| result)
             .collect();
 
-        Ok(FileReplaceResult {
-            file_results,
-            next_cursor,
-            total_files_found,
-            dry_run: param.dry_run,
-        })
+        // Calculate totals
+        let total_changes: usize = file_results.iter().map(|r| r.total_changes).sum();
+        let files_with_changes: Vec<(String, usize)> = file_results
+            .iter()
+            .map(|r| (r.file_path.to_string_lossy().to_string(), r.total_changes))
+            .collect();
+
+        tracing::Span::current().record("total_changes", total_changes);
+        tracing::Span::current().record("files_modified", files_with_changes.len());
+
+        if param.summary_only {
+            // Convert to summary results
+            let summary_results: Vec<FileSummaryResult> = file_results
+                .into_iter()
+                .map(|diff_result| {
+                    let sample_changes = if param.include_samples {
+                        diff_result.changes.into_iter().take(param.max_samples).collect()
+                    } else {
+                        vec![]
+                    };
+                    
+                    FileSummaryResult {
+                        file_path: diff_result.file_path,
+                        file_size_bytes: diff_result.file_size_bytes,
+                        total_changes: diff_result.total_changes,
+                        lines_changed: diff_result.total_changes, // For now, assume 1:1 mapping
+                        file_hash: diff_result.file_hash,
+                        sample_changes,
+                    }
+                })
+                .collect();
+
+            Ok(FileReplaceResult {
+                file_results: vec![],
+                summary_results,
+                next_cursor,
+                total_files_found,
+                dry_run: param.dry_run,
+                total_changes,
+                files_with_changes,
+            })
+        } else {
+            Ok(FileReplaceResult {
+                file_results,
+                summary_results: vec![],
+                next_cursor,
+                total_files_found,
+                dry_run: param.dry_run,
+                total_changes,
+                files_with_changes,
+            })
+        }
     }
 
+    #[tracing::instrument(skip(self))]
     pub async fn list_languages(
         &self,
         _param: ListLanguagesParam,
@@ -561,6 +660,7 @@ impl AstGrepService {
         Ok(ListLanguagesResult { languages })
     }
 
+    #[tracing::instrument(skip(self))]
     pub async fn documentation(
         &self,
         _param: DocumentationParam,
@@ -729,7 +829,7 @@ Replaces patterns in code provided as a string. Useful for in-memory code transf
 
 ## file_replace
 
-Replaces patterns within files matching a glob pattern. Returns efficient line diffs instead of full file content.
+Replaces patterns within files matching a glob pattern. Supports bulk refactoring with optimized response formats.
 
 **Parameters:**
 - `path_pattern`: A glob pattern for files to modify (e.g., "src/**/*.js").
@@ -737,35 +837,53 @@ Replaces patterns within files matching a glob pattern. Returns efficient line d
 - `replacement`: The ast-grep replacement pattern.
 - `language`: The programming language of the file.
 - `dry_run` (optional): If true (default), only show preview. If false, actually modify files.
+- `summary_only` (optional): If true, return only change counts per file (default: false).
+- `include_samples` (optional): If true with summary_only, include sample changes (default: false).
+- `max_samples` (optional): Number of sample changes per file when include_samples=true (default: 3).
 - `max_results` (optional): Maximum number of results to return (default: 1000).
 - `max_file_size` (optional): Maximum file size to process in bytes (default: 50MB).
 - `cursor` (optional): Continuation token from previous search for pagination.
 
-**Example Usage (Preview Mode - Default):**
+**IMPORTANT FOR LLMs**: Use `summary_only=true` for bulk refactoring to avoid token limits. This returns concise statistics instead of full diffs.
+
+**Bulk Refactoring Workflow for LLMs:**
+
+1. **Survey scope (use for large codebases to avoid token limits):**
 ```json
 {
-  "tool_code": "file_replace",
-  "tool_params": {
-    "path_pattern": "src/**/*.js",
-    "pattern": "const $VAR = $VAL",
-    "replacement": "let $VAR = $VAL",
-    "language": "javascript",
-    "dry_run": true
-  }
+  "path_pattern": "src/**/*.rs",
+  "pattern": "\"$STRING\".to_string()",
+  "replacement": "\"$STRING\".into()",
+  "language": "rust",
+  "summary_only": true,
+  "dry_run": true
+}
+```
+Returns: `{"files_with_changes": [["src/main.rs", 15], ["src/lib.rs", 8]], "total_changes": 23}`
+
+2. **Preview samples before applying:**
+```json
+{
+  "path_pattern": "src/**/*.rs",
+  "pattern": "\"$STRING\".to_string()",
+  "replacement": "\"$STRING\".into()",
+  "language": "rust",
+  "summary_only": true,
+  "include_samples": true,
+  "max_samples": 3,
+  "dry_run": true
 }
 ```
 
-**Example Usage (Actually Modify Files):**
+3. **Apply changes:**
 ```json
 {
-  "tool_code": "file_replace",
-  "tool_params": {
-    "path_pattern": "src/**/*.js",
-    "pattern": "const $VAR = $VAL",
-    "replacement": "let $VAR = $VAL",
-    "language": "javascript",
-    "dry_run": false
-  }
+  "path_pattern": "src/**/*.rs", 
+  "pattern": "\"$STRING\".to_string()",
+  "replacement": "\"$STRING\".into()",
+  "language": "rust",
+  "summary_only": true,
+  "dry_run": false
 }
 ```
 
@@ -921,7 +1039,7 @@ pub struct MatchResult {
     pub vars: HashMap<String, String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SearchParam {
     pub code: String,
     pub pattern: String,
@@ -1029,6 +1147,15 @@ pub struct FileReplaceParam {
     /// If true (default), only show preview. If false, actually modify files.
     #[serde(default = "default_dry_run")]
     pub dry_run: bool,
+    /// If true, only return summary statistics (change counts per file)
+    #[serde(default)]
+    pub summary_only: bool,
+    /// If true, include sample changes in the response (first few changes per file)
+    #[serde(default)]
+    pub include_samples: bool,
+    /// Maximum number of sample changes to show per file (default: 3)
+    #[serde(default = "default_max_samples")]
+    pub max_samples: usize,
 }
 
 impl Default for FileReplaceParam {
@@ -1042,6 +1169,9 @@ impl Default for FileReplaceParam {
             max_file_size: None,
             cursor: None,
             dry_run: true, // Default to true
+            summary_only: false,
+            include_samples: false,
+            max_samples: default_max_samples(),
         }
     }
 }
@@ -1050,9 +1180,18 @@ fn default_dry_run() -> bool {
     true
 }
 
+fn default_max_samples() -> usize {
+    3
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FileReplaceResult {
+    /// Full diff results (only present when summary_only=false)
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub file_results: Vec<FileDiffResult>,
+    /// Summary results (only present when summary_only=true)
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub summary_results: Vec<FileSummaryResult>,
     /// Continuation token for next page (None if no more results)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<SearchCursor>,
@@ -1060,6 +1199,10 @@ pub struct FileReplaceResult {
     pub total_files_found: usize,
     /// Whether this was a dry run or actual file modification
     pub dry_run: bool,
+    /// Total changes across all files
+    pub total_changes: usize,
+    /// Files with changes as (filename, change_count) pairs
+    pub files_with_changes: Vec<(String, usize)>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1076,6 +1219,18 @@ pub struct FileDiffResult {
     pub changes: Vec<FileDiffChange>,
     pub total_changes: usize,
     pub file_hash: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FileSummaryResult {
+    pub file_path: PathBuf,
+    pub file_size_bytes: u64,
+    pub total_changes: usize,
+    pub lines_changed: usize,
+    pub file_hash: String,
+    /// Sample changes if include_samples is true
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub sample_changes: Vec<FileDiffChange>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1099,17 +1254,18 @@ impl ServerHandler for AstGrepService {
         InitializeResult {
             protocol_version: ProtocolVersion::LATEST,
             server_info: Implementation {
-                name: "ast-grep-mcp".to_string(),
-                version: "0.1.0".to_string(),
+                name: "ast-grep-mcp".into(),
+                version: "0.1.0".into(),
             },
             capabilities: ServerCapabilities {
                 tools: Some(rmcp::model::ToolsCapability { list_changed: Some(true) }),
                 ..Default::default()
             },
-            instructions: Some("This MCP server provides tools for structural code search and analysis using ast-grep. You can search for code patterns within strings or files, and extract metavariables. Use the `documentation` tool for detailed usage examples.".to_string()),
+            instructions: Some("This MCP server provides tools for structural code search and transformation using ast-grep. For bulk refactoring, use file_replace with summary_only=true to avoid token limits. Use the `documentation` tool for detailed examples.".into()),
         }
     }
 
+    #[tracing::instrument(skip(self, _request, _context))]
     async fn list_tools(
         &self,
         _request: PaginatedRequestParam,
@@ -1152,7 +1308,7 @@ impl ServerHandler for AstGrepService {
                 },
                 Tool {
                     name: "file_replace".into(),
-                    description: "Replace patterns in files. Returns line diffs. Use dry_run=false to actually modify files.".into(),
+                    description: "Replace patterns in files. Use summary_only=true for bulk refactoring to avoid token limits. Returns change counts or line diffs.".into(),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({
                         "type": "object",
                         "properties": {
@@ -1163,6 +1319,9 @@ impl ServerHandler for AstGrepService {
                             "max_results": { "type": "integer", "minimum": 1, "maximum": 10000 },
                             "max_file_size": { "type": "integer", "minimum": 1024, "maximum": 1073741824 },
                             "dry_run": { "type": "boolean", "default": true, "description": "If true (default), only show preview. If false, actually modify files." },
+                            "summary_only": { "type": "boolean", "default": false, "description": "If true, only return summary statistics (change counts per file)" },
+                            "include_samples": { "type": "boolean", "default": false, "description": "If true, include sample changes in the response (first few changes per file)" },
+                            "max_samples": { "type": "integer", "default": 3, "minimum": 1, "maximum": 20, "description": "Maximum number of sample changes to show per file" },
                             "cursor": {
                                 "type": "object",
                                 "properties": {
@@ -1190,6 +1349,7 @@ impl ServerHandler for AstGrepService {
             })
     }
 
+    #[tracing::instrument(skip(self, request, _context), fields(tool_name = %request.name))]
     async fn call_tool(
         &self,
         request: CallToolRequestParam,
@@ -1272,8 +1432,8 @@ mod tests {
         let service = AstGrepService::new();
         let param = SearchParam {
             code: "function greet() { console.log(\"Hello\"); }".to_string(),
-            pattern: "console.log($VAR)".to_string(),
-            language: "javascript".to_string(),
+            pattern: "console.log($VAR)".into(),
+            language: "javascript".into(),
         };
 
         let result = service.search(param).await.unwrap();
@@ -1290,8 +1450,8 @@ mod tests {
         let service = AstGrepService::new();
         let param = SearchParam {
             code: "function greet() { alert(\"Hello\"); }".to_string(),
-            pattern: "console.log($VAR)".to_string(),
-            language: "javascript".to_string(),
+            pattern: "console.log($VAR)".into(),
+            language: "javascript".into(),
         };
 
         let result = service.search(param).await.unwrap();
@@ -1303,8 +1463,8 @@ mod tests {
         let service = AstGrepService::new();
         let param = SearchParam {
             code: "function greet() { console.log(\"Hello\"); }".to_string(),
-            pattern: "console.log($VAR)".to_string(),
-            language: "invalid_language".to_string(),
+            pattern: "console.log($VAR)".into(),
+            language: "invalid_language".into(),
         };
 
         let result = service.search(param).await;
@@ -1317,9 +1477,9 @@ mod tests {
         let service = AstGrepService::new();
         let param = ReplaceParam {
             code: "function oldName() { console.log(\"Hello\"); }".to_string(),
-            pattern: "function oldName()".to_string(),
-            replacement: "function newName()".to_string(),
-            language: "javascript".to_string(),
+            pattern: "function oldName()".into(),
+            replacement: "function newName()".into(),
+            language: "javascript".into(),
         };
 
         let result = service.replace(param).await.unwrap();
@@ -1331,10 +1491,10 @@ mod tests {
     async fn test_replace_with_vars() {
         let service = AstGrepService::new();
         let param = ReplaceParam {
-            code: "const x = 5; const y = 10;".to_string(),
-            pattern: "const $VAR = $VAL".to_string(),
-            replacement: "let $VAR = $VAL".to_string(),
-            language: "javascript".to_string(),
+            code: "const x = 5; const y = 10;".into(),
+            pattern: "const $VAR = $VAL".into(),
+            replacement: "let $VAR = $VAL".into(),
+            language: "javascript".into(),
         };
 
         let result = service.replace(param).await.unwrap();
@@ -1347,10 +1507,10 @@ mod tests {
     async fn test_replace_multiple_occurrences() {
         let service = AstGrepService::new();
         let param = ReplaceParam {
-            code: "let a = 1; let b = 2; let c = 3;".to_string(),
-            pattern: "let $VAR = $VAL".to_string(),
-            replacement: "const $VAR = $VAL".to_string(),
-            language: "javascript".to_string(),
+            code: "let a = 1; let b = 2; let c = 3;".into(),
+            pattern: "let $VAR = $VAL".into(),
+            replacement: "const $VAR = $VAL".into(),
+            language: "javascript".into(),
         };
         let result = service.replace(param).await.unwrap();
         assert_eq!(
@@ -1364,8 +1524,8 @@ mod tests {
         let service = AstGrepService::new();
         let param = SearchParam {
             code: "fn main() { println!(\"Hello, world!\"); }".to_string(),
-            pattern: "println!($VAR)".to_string(),
-            language: "rust".to_string(),
+            pattern: "println!($VAR)".into(),
+            language: "rust".into(),
         };
 
         let result = service.search(param).await.unwrap();
@@ -1436,8 +1596,8 @@ mod tests {
         let service = AstGrepService::new();
         let param = SearchParam {
             code: "console.log(\"Hello\"); console.log(\"World\"); alert(\"test\");".to_string(),
-            pattern: "console.log($VAR)".to_string(),
-            language: "javascript".to_string(),
+            pattern: "console.log($VAR)".into(),
+            language: "javascript".into(),
         };
 
         let result = service.search(param).await.unwrap();
@@ -1456,10 +1616,9 @@ mod tests {
     async fn test_complex_pattern() {
         let service = AstGrepService::new();
         let param = SearchParam {
-            code: "function test(a, b) { return a + b; } function add(x, y) { return x + y; }"
-                .to_string(),
-            pattern: "function $NAME($PARAM1, $PARAM2) { return $PARAM1 + $PARAM2; }".to_string(),
-            language: "javascript".to_string(),
+            code: "function test(a, b) { return a + b; } function add(x, y) { return x + y; }".into(),
+            pattern: "function $NAME($PARAM1, $PARAM2) { return $PARAM1 + $PARAM2; }".into(),
+            language: "javascript".into(),
         };
 
         let result = service.search(param).await.unwrap();
@@ -1483,13 +1642,36 @@ mod tests {
     async fn test_invalid_language_error() {
         let service = AstGrepService::new();
         let param = SearchParam {
-            code: "let x = 1;".to_string(),
-            pattern: "let x = 1;".to_string(),
-            language: "not_a_real_language".to_string(),
+            code: "let x = 1;".into(),
+            pattern: "let x = 1;".into(),
+            language: "not_a_real_language".into(),
         };
         let result = service.search(param).await;
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(matches!(err, ServiceError::Internal(msg) if msg == "Failed to parse language"));
+    }
+
+    #[tokio::test]
+    async fn test_pattern_caching() {
+        let service = AstGrepService::new();
+        let param = SearchParam {
+            code: "console.log(\"test\"); console.log(\"another\");".into(),
+            pattern: "console.log($VAR)".into(),
+            language: "javascript".into(),
+        };
+
+        // Run the same search twice
+        let result1 = service.search(param.clone()).await.unwrap();
+        let result2 = service.search(param).await.unwrap();
+
+        // Both should return the same results
+        assert_eq!(result1.matches.len(), 2);
+        assert_eq!(result2.matches.len(), 2);
+        assert_eq!(result1.matches[0].text, result2.matches[0].text);
+
+        // Verify cache has the pattern (cache should have 1 entry)
+        let cache = service.pattern_cache.lock().unwrap();
+        assert_eq!(cache.len(), 1);
     }
 }

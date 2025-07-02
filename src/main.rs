@@ -6,6 +6,7 @@ mod ast_grep_service;
 use ast_grep_service::AstGrepService;
 
 #[tokio::main]
+#[tracing::instrument]
 async fn main() -> Result<()> {
     // Initialize the tracing subscriber with file and stdout logging
     tracing_subscriber::fmt()
@@ -19,11 +20,9 @@ async fn main() -> Result<()> {
     // Create an instance of our ast-grep service
     let service = AstGrepService::new()
         .serve(stdio())
-        .await
-        .inspect_err(|e| {
-            tracing::error!("serving error: {:?}", e);
-        })?;
+        .await?;
 
+    tracing::info!("Service started, waiting for connections");
     service.waiting().await?;
     Ok(())
 }
