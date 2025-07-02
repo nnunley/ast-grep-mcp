@@ -1,0 +1,1 @@
+- When exploring solutions, put your code in one of examples/, tests/, or the source file being tested.

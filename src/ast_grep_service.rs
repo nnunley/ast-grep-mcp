@@ -1,8 +1,8 @@
 use std::{borrow::Cow, collections::HashMap, fmt, io, path::PathBuf, str::FromStr, sync::Arc};
+use sha2::{Sha256, Digest};
 
 use ast_grep_core::{AstGrep, Pattern};
 use ast_grep_language::SupportLang as Language;
-use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose};
 use futures::stream::{self, StreamExt};
 use globset::{Glob, GlobSetBuilder};
@@ -25,6 +25,8 @@ pub struct ServiceConfig {
     pub max_concurrency: usize,
     /// Maximum number of results to return per search
     pub max_results: usize,
+    /// Root directories for file search (defaults to current working directory)
+    pub root_directories: Vec<PathBuf>,
 }
 
 impl Default for ServiceConfig {
@@ -33,6 +35,7 @@ impl Default for ServiceConfig {
             max_file_size: 50 * 1024 * 1024, // 50MB
             max_concurrency: 10,
             max_results: 1000,
+            root_directories: vec![std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))],
         }
     }
 }
@@ -85,6 +88,19 @@ impl From<serde_json::Error> for ServiceError {
     }
 }
 
+impl std::error::Error for ServiceError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ServiceError::Io(e) => Some(e),
+            ServiceError::SerdeJson(e) => Some(e),
+            ServiceError::Glob(e) => Some(e),
+            ServiceError::ParserError(_) => None,
+            ServiceError::ToolNotFound(_) => None,
+            ServiceError::Internal(_) => None,
+        }
+    }
+}
+
 impl From<ServiceError> for ErrorData {
     fn from(err: ServiceError) -> Self {
         ErrorData::internal_error(Cow::Owned(err.to_string()), None)
@@ -98,8 +114,15 @@ impl AstGrepService {
         }
     }
 
+    #[allow(dead_code)]
     pub fn with_config(config: ServiceConfig) -> Self {
         Self { config }
+    }
+
+    fn calculate_file_hash(content: &str) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(content.as_bytes());
+        format!("sha256:{}", hex::encode(hasher.finalize()))
     }
 
     pub async fn search(&self, param: SearchParam) -> Result<SearchResult, ServiceError> {
@@ -153,29 +176,34 @@ impl AstGrepService {
             None
         };
 
-        // Collect all matching file paths, sorted for consistent pagination
-        let mut all_matching_files: Vec<_> = WalkDir::new(".")
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|entry| {
-                let path = entry.path();
-                path.is_file() && globset.is_match(path)
+        // Collect all matching file paths from all root directories, sorted for consistent pagination
+        let mut all_matching_files: Vec<_> = self.config.root_directories
+            .iter()
+            .flat_map(|root_dir| {
+                WalkDir::new(root_dir)
+                    .into_iter()
+                    .filter_map(|e| e.ok())
+                    .filter(|entry| {
+                        let path = entry.path();
+                        if !path.is_file() || !globset.is_match(path) {
+                            return false;
+                        }
+                        // Check file size
+                        if let Ok(metadata) = entry.metadata() {
+                            if metadata.len() > max_file_size {
+                                tracing::warn!(
+                                    "Skipping large file: {:?} ({}MB)",
+                                    entry.path(),
+                                    metadata.len() / (1024 * 1024)
+                                );
+                                return false;
+                            }
+                        }
+                        true
+                    })
+                    .map(|entry| entry.path().to_path_buf())
+                    .collect::<Vec<_>>()
             })
-            .filter(|entry| {
-                // Check file size
-                if let Ok(metadata) = entry.metadata() {
-                    if metadata.len() > max_file_size {
-                        tracing::warn!(
-                            "Skipping large file: {:?} ({}MB)",
-                            entry.path(),
-                            metadata.len() / (1024 * 1024)
-                        );
-                        return false;
-                    }
-                }
-                true
-            })
-            .map(|entry| entry.path().to_path_buf())
             .collect();
 
         // Sort for consistent ordering across pagination requests
@@ -289,8 +317,18 @@ impl AstGrepService {
         let pattern = Pattern::new(param.pattern.as_str(), lang);
         let replacement = param.replacement.as_str();
 
-        ast.replace(pattern, replacement)
-            .map_err(|_| ServiceError::Internal("Failed to apply replacement".to_string()))?;
+        // Find all matches and replace them manually
+        let mut changed = true;
+        let mut iterations = 0;
+        while changed && iterations < 100 { // Safety limit to prevent infinite loops
+            changed = false;
+            if let Some(_node) = ast.root().find(pattern.clone()) {
+                if ast.replace(pattern.clone(), replacement).is_ok() {
+                    changed = true;
+                }
+            }
+            iterations += 1;
+        }
         let rewritten_code = ast.root().text().to_string();
 
         Ok(ReplaceResult { rewritten_code })
@@ -317,6 +355,7 @@ impl AstGrepService {
                     file_results: vec![],
                     next_cursor: Some(SearchCursor::complete()),
                     total_files_found: 0,
+                    dry_run: param.dry_run,
                 });
             }
             Some(cursor.decode_path()?)
@@ -324,29 +363,34 @@ impl AstGrepService {
             None
         };
 
-        // Collect all matching file paths, sorted for consistent pagination
-        let mut all_matching_files: Vec<_> = WalkDir::new(".")
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|entry| {
-                let path = entry.path();
-                path.is_file() && globset.is_match(path)
+        // Collect all matching file paths from all root directories, sorted for consistent pagination
+        let mut all_matching_files: Vec<_> = self.config.root_directories
+            .iter()
+            .flat_map(|root_dir| {
+                WalkDir::new(root_dir)
+                    .into_iter()
+                    .filter_map(|e| e.ok())
+                    .filter(|entry| {
+                        let path = entry.path();
+                        if !path.is_file() || !globset.is_match(path) {
+                            return false;
+                        }
+                        // Check file size
+                        if let Ok(metadata) = entry.metadata() {
+                            if metadata.len() > max_file_size {
+                                tracing::warn!(
+                                    "Skipping large file: {:?} ({}MB)",
+                                    entry.path(),
+                                    metadata.len() / (1024 * 1024)
+                                );
+                                return false;
+                            }
+                        }
+                        true
+                    })
+                    .map(|entry| entry.path().to_path_buf())
+                    .collect::<Vec<_>>()
             })
-            .filter(|entry| {
-                // Check file size
-                if let Ok(metadata) = entry.metadata() {
-                    if metadata.len() > max_file_size {
-                        tracing::warn!(
-                            "Skipping large file: {:?} ({}MB)",
-                            entry.path(),
-                            metadata.len() / (1024 * 1024)
-                        );
-                        return false;
-                    }
-                }
-                true
-            })
-            .map(|entry| entry.path().to_path_buf())
             .collect();
 
         all_matching_files.sort();
@@ -366,14 +410,15 @@ impl AstGrepService {
         // Process files in parallel
         let pattern_str = param.pattern.clone();
         let replacement_str = param.replacement.clone();
-        let file_results_raw: Vec<(PathBuf, FileReplaceResultItem)> =
+        let dry_run = param.dry_run;
+        let file_results_raw: Vec<(PathBuf, FileDiffResult)> =
             stream::iter(files_to_process.iter().cloned())
                 .map(|path| {
                     let pattern_str = pattern_str.clone();
                     let replacement_str = replacement_str.clone();
                     async move {
                         let result = self
-                            .replace_single_file(path.clone(), pattern_str, replacement_str, lang)
+                            .replace_single_file(path.clone(), pattern_str, replacement_str, lang, dry_run)
                             .await;
                         (path, result)
                     }
@@ -404,7 +449,7 @@ impl AstGrepService {
         };
 
         // Extract just the file results
-        let file_results: Vec<FileReplaceResultItem> = file_results_raw
+        let file_results: Vec<FileDiffResult> = file_results_raw
             .into_iter()
             .map(|(_, result)| result)
             .collect();
@@ -413,6 +458,7 @@ impl AstGrepService {
             file_results,
             next_cursor,
             total_files_found,
+            dry_run: param.dry_run,
         })
     }
 
@@ -422,30 +468,68 @@ impl AstGrepService {
         pattern_str: String,
         replacement_str: String,
         lang: Language,
-    ) -> Result<Option<FileReplaceResultItem>, ServiceError> {
+        dry_run: bool,
+    ) -> Result<Option<FileDiffResult>, ServiceError> {
         let file_content = tokio::fs::read_to_string(&path).await?;
+        let original_lines: Vec<&str> = file_content.lines().collect();
 
         let mut ast = AstGrep::new(file_content.as_str(), lang);
         let pattern = Pattern::new(pattern_str.as_str(), lang);
         let replacement = replacement_str.as_str();
 
-        match ast.replace(pattern, replacement) {
-            Ok(_) => {
-                let rewritten_file_content = ast.root().text().to_string();
-                // Only return if there were actual changes
-                if rewritten_file_content != file_content {
-                    Ok(Some(FileReplaceResultItem {
-                        file_path: path,
-                        rewritten_content: rewritten_file_content,
-                    }))
-                } else {
-                    Ok(None)
+        // Replace all occurrences, not just the first one
+        let mut changed = true;
+        let mut iterations = 0;
+        while changed && iterations < 100 { // Safety limit to prevent infinite loops
+            changed = false;
+            if let Some(_node) = ast.root().find(pattern.clone()) {
+                if ast.replace(pattern.clone(), replacement).is_ok() {
+                    changed = true;
                 }
             }
-            Err(_) => Err(ServiceError::Internal(
-                "Failed to apply replacement".to_string(),
-            )),
+            iterations += 1;
         }
+        
+        let rewritten_content = ast.root().text().to_string();
+        
+        // Only proceed if there were actual changes
+        if rewritten_content == file_content {
+            return Ok(None);
+        }
+
+        let new_lines: Vec<&str> = rewritten_content.lines().collect();
+        let mut changes = Vec::new();
+
+        // Create line-by-line diff
+        let max_len = original_lines.len().max(new_lines.len());
+        for i in 0..max_len {
+            let old_line = original_lines.get(i).unwrap_or(&"");
+            let new_line = new_lines.get(i).unwrap_or(&"");
+            
+            if old_line != new_line {
+                changes.push(FileDiffChange {
+                    line: i + 1, // 1-based line numbers
+                    old_text: old_line.to_string(),
+                    new_text: new_line.to_string(),
+                });
+            }
+        }
+
+        // If not dry run, actually write the changes
+        if !dry_run && !changes.is_empty() {
+            tokio::fs::write(&path, rewritten_content).await?;
+        }
+
+        let file_metadata = tokio::fs::metadata(&path).await?;
+        
+        let total_changes = changes.len();
+        Ok(Some(FileDiffResult {
+            file_path: path,
+            file_size_bytes: file_metadata.len(),
+            changes,
+            total_changes,
+            file_hash: Self::calculate_file_hash(&file_content),
+        }))
     }
 
     pub async fn list_languages(
@@ -491,6 +575,16 @@ impl AstGrepService {
         _param: DocumentationParam,
     ) -> Result<DocumentationResult, ServiceError> {
         let docs = r##"
+# AST-Grep MCP Service Documentation
+
+This service provides structural code search and transformation using ast-grep patterns.
+
+## Key Concepts
+
+**AST Patterns:** Use `$VAR` to capture single nodes, `$$$` to capture multiple statements
+**Languages:** Supports javascript, typescript, rust, python, java, go, and many more
+**Glob Patterns:** Use `**/*.js` for recursive search, `src/*.ts` for single directory
+
 ## search
 
 Searches for patterns in code provided as a string. Useful for quick checks or when code snippets are generated dynamically.
@@ -512,9 +606,30 @@ Searches for patterns in code provided as a string. Useful for quick checks or w
 }
 ```
 
+**More Pattern Examples:**
+```json
+// Find function declarations
+{
+  "pattern": "function $NAME($PARAMS) { $BODY }",
+  "language": "javascript"
+}
+
+// Find variable assignments
+{
+  "pattern": "const $VAR = $VALUE",
+  "language": "javascript"
+}
+
+// Find Rust function definitions
+{
+  "pattern": "fn $NAME($PARAMS) -> $RETURN_TYPE { $BODY }",
+  "language": "rust"
+}
+```
+
 ## file_search
 
-Searches for patterns within a specified file. Ideal for analyzing existing code files on the system.
+Searches for patterns within files matching a glob pattern. Ideal for analyzing existing code files on the system.
 
 **Parameters:**
 - `path_pattern`: A glob pattern for files to search within (e.g., "src/**/*.js").
@@ -533,6 +648,37 @@ Searches for patterns within a specified file. Ideal for analyzing existing code
     "pattern": "fn $FN_NAME()",
     "language": "rust"
   }
+}
+```
+
+**Common Use Cases:**
+```json
+// Find all TODO comments
+{
+  "path_pattern": "**/*.js",
+  "pattern": "// TODO: $MESSAGE",
+  "language": "javascript"
+}
+
+// Find error handling patterns
+{
+  "path_pattern": "src/**/*.ts",
+  "pattern": "catch ($ERROR) { $BODY }",
+  "language": "typescript"
+}
+
+// Find React components
+{
+  "path_pattern": "components/**/*.jsx",
+  "pattern": "function $NAME($PROPS) { return $JSX }",
+  "language": "javascript"
+}
+
+// Find Python class definitions
+{
+  "path_pattern": "**/*.py",
+  "pattern": "class $NAME($BASE): $BODY",
+  "language": "python"
 }
 ```
 
@@ -559,20 +705,52 @@ Replaces patterns in code provided as a string. Useful for in-memory code transf
 }
 ```
 
+**Transformation Examples:**
+```json
+// Convert var to const
+{
+  "pattern": "var $VAR = $VALUE",
+  "replacement": "const $VAR = $VALUE",
+  "language": "javascript"
+}
+
+// Add async/await
+{
+  "pattern": "function $NAME($PARAMS) { return $BODY }",
+  "replacement": "async function $NAME($PARAMS) { return await $BODY }",
+  "language": "javascript"
+}
+
+// Convert Python print statements
+{
+  "pattern": "print $ARGS",
+  "replacement": "print($ARGS)",
+  "language": "python"
+}
+
+// Modernize Rust syntax
+{
+  "pattern": "match $EXPR { $ARMS }",
+  "replacement": "match $EXPR { $ARMS }",
+  "language": "rust"
+}
+```
+
 ## file_replace
 
-Replaces patterns within a specified file. The rewritten content is returned, the file is NOT modified in place.
+Replaces patterns within files matching a glob pattern. Returns efficient line diffs instead of full file content.
 
 **Parameters:**
 - `path_pattern`: A glob pattern for files to modify (e.g., "src/**/*.js").
 - `pattern`: The ast-grep pattern to search for.
 - `replacement`: The ast-grep replacement pattern.
 - `language`: The programming language of the file.
+- `dry_run` (optional): If true (default), only show preview. If false, actually modify files.
 - `max_results` (optional): Maximum number of results to return (default: 1000).
 - `max_file_size` (optional): Maximum file size to process in bytes (default: 50MB).
 - `cursor` (optional): Continuation token from previous search for pagination.
 
-**Example Usage:**
+**Example Usage (Preview Mode - Default):**
 ```json
 {
   "tool_code": "file_replace",
@@ -580,8 +758,69 @@ Replaces patterns within a specified file. The rewritten content is returned, th
     "path_pattern": "src/**/*.js",
     "pattern": "const $VAR = $VAL",
     "replacement": "let $VAR = $VAL",
-    "language": "javascript"
+    "language": "javascript",
+    "dry_run": true
   }
+}
+```
+
+**Example Usage (Actually Modify Files):**
+```json
+{
+  "tool_code": "file_replace",
+  "tool_params": {
+    "path_pattern": "src/**/*.js",
+    "pattern": "const $VAR = $VAL",
+    "replacement": "let $VAR = $VAL",
+    "language": "javascript",
+    "dry_run": false
+  }
+}
+```
+
+**Returns Line Diffs:**
+```json
+{
+  "file_results": [{
+    "file_path": "src/main.js",
+    "file_size_bytes": 15420,
+    "changes": [
+      {
+        "line": 15,
+        "old_text": "const x = 5;",
+        "new_text": "let x = 5;"
+      },
+      {
+        "line": 23,
+        "old_text": "const result = calculate();", 
+        "new_text": "let result = calculate();"
+      }
+    ],
+    "total_changes": 2,
+    "file_hash": "sha256:abc123..."
+  }],
+  "dry_run": true
+}
+```
+
+**Batch Transformation Examples:**
+```json
+// Preview changes first
+{
+  "path_pattern": "src/**/*.ts",
+  "pattern": "fetch($URL).then($HANDLER)",
+  "replacement": "await fetch($URL).then($HANDLER)",
+  "language": "typescript",
+  "dry_run": true
+}
+
+// Then apply the changes
+{
+  "path_pattern": "src/**/*.ts", 
+  "pattern": "fetch($URL).then($HANDLER)",
+  "replacement": "await fetch($URL).then($HANDLER)",
+  "language": "typescript",
+  "dry_run": false
 }
 ```
 
@@ -631,6 +870,53 @@ Replaces patterns within a specified file. The rewritten content is returned, th
   }
 }
 ```
+
+## list_languages
+
+Returns all supported programming languages.
+
+**Usage:**
+```json
+{
+  "tool_code": "list_languages",
+  "tool_params": {}
+}
+```
+
+**Supported Languages Include:**
+- **Web:** javascript, typescript, tsx, html, css
+- **Systems:** rust, c, cpp, go 
+- **Enterprise:** java, csharp, kotlin, scala
+- **Scripting:** python, ruby, lua, bash
+- **Others:** swift, dart, elixir, haskell, php, yaml, json
+
+## Best Practices
+
+**Pattern Writing Tips:**
+- Use specific patterns: `console.log($VAR)` vs `$ANY`
+- Capture what you need: `function $NAME($PARAMS)` captures both name and parameters
+- Test patterns with the `search` tool first before using `file_search`
+
+**Performance Tips:**
+- Use specific glob patterns: `src/components/*.tsx` vs `**/*`
+- Set reasonable `max_file_size` and `max_results` limits
+- Use pagination for large codebases
+
+**Common Patterns:**
+- Function calls: `$FUNC($ARGS)`
+- Variable declarations: `$TYPE $NAME = $VALUE`
+- Class methods: `$VISIBILITY $METHOD($PARAMS) { $BODY }`
+- Import statements: `import $NAME from '$PATH'`
+
+## Error Handling
+
+The service returns structured errors for:
+- Invalid glob patterns
+- Unsupported languages
+- File access issues
+- Pattern syntax errors
+
+Always check the response for error conditions before processing results.
         "##;
         Ok(DocumentationResult {
             documentation: docs.to_string(),
@@ -693,7 +979,7 @@ impl SearchCursor {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct FileSearchParam {
     pub path_pattern: String,
     pub pattern: String,
@@ -749,22 +1035,56 @@ pub struct FileReplaceParam {
     /// Continuation token from previous replace operation
     #[serde(default)]
     pub cursor: Option<SearchCursor>,
+    /// If true (default), only show preview. If false, actually modify files.
+    #[serde(default = "default_dry_run")]
+    pub dry_run: bool,
+}
+
+impl Default for FileReplaceParam {
+    fn default() -> Self {
+        Self {
+            path_pattern: String::new(),
+            pattern: String::new(),
+            replacement: String::new(),
+            language: String::new(),
+            max_results: None,
+            max_file_size: None,
+            cursor: None,
+            dry_run: true, // Default to true
+        }
+    }
+}
+
+fn default_dry_run() -> bool {
+    true
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FileReplaceResult {
-    pub file_results: Vec<FileReplaceResultItem>,
+    pub file_results: Vec<FileDiffResult>,
     /// Continuation token for next page (None if no more results)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<SearchCursor>,
     /// Total number of files that matched the glob pattern (for progress indication)
     pub total_files_found: usize,
+    /// Whether this was a dry run or actual file modification
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct FileReplaceResultItem {
+pub struct FileDiffChange {
+    pub line: usize,
+    pub old_text: String,
+    pub new_text: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FileDiffResult {
     pub file_path: PathBuf,
-    pub rewritten_content: String,
+    pub file_size_bytes: u64,
+    pub changes: Vec<FileDiffChange>,
+    pub total_changes: usize,
+    pub file_hash: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -783,7 +1103,6 @@ pub struct DocumentationResult {
     pub documentation: String,
 }
 
-#[async_trait]
 impl ServerHandler for AstGrepService {
     fn get_info(&self) -> InitializeResult {
         InitializeResult {
@@ -802,7 +1121,7 @@ impl ServerHandler for AstGrepService {
 
     async fn list_tools(
         &self,
-        _request: Option<PaginatedRequestParam>,
+        _request: PaginatedRequestParam,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         Ok(ListToolsResult {
@@ -842,7 +1161,7 @@ impl ServerHandler for AstGrepService {
                 },
                 Tool {
                     name: "file_replace".to_string().into(),
-                    description: "Replace patterns in a file.".to_string().into(),
+                    description: "Replace patterns in files. Returns line diffs. Use dry_run=false to actually modify files.".to_string().into(),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({
                         "type": "object",
                         "properties": {
@@ -852,6 +1171,7 @@ impl ServerHandler for AstGrepService {
                             "language": { "type": "string" },
                             "max_results": { "type": "integer", "minimum": 1, "maximum": 10000 },
                             "max_file_size": { "type": "integer", "minimum": 1024, "maximum": 1073741824 },
+                            "dry_run": { "type": "boolean", "default": true, "description": "If true (default), only show preview. If false, actually modify files." },
                             "cursor": {
                                 "type": "object",
                                 "properties": {
@@ -1086,6 +1406,7 @@ mod tests {
             max_file_size: 1024 * 1024, // 1MB
             max_concurrency: 5,
             max_results: 10,
+            root_directories: vec![std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))],
         };
 
         let service = AstGrepService::with_config(custom_config);
