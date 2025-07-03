@@ -1,0 +1,9 @@
+# Example ast-grep rule configuration for JavaScript modernization
+
+id: modernize-var-to-const
+language: javascript
+message: "Replace var with const for variables that are never reassigned"
+severity: suggestion
+rule:
+  pattern: "var $NAME = $VALUE"
+fix: "const $NAME = $VALUE"

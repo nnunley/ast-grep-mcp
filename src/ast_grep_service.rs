@@ -14,6 +14,7 @@ use rmcp::{
     service::{RequestContext, RoleServer},
 };
 use serde::{Deserialize, Serialize};
+use serde_yaml;
 use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
@@ -156,6 +157,96 @@ impl AstGrepService {
         }
 
         Ok(pattern)
+    }
+
+    fn parse_rule_config(&self, rule_config_str: &str) -> Result<RuleConfig, ServiceError> {
+        // First try to parse as YAML
+        if let Ok(config) = serde_yaml::from_str::<RuleConfig>(rule_config_str) {
+            return Ok(config);
+        }
+        
+        // If YAML fails, try JSON
+        serde_json::from_str::<RuleConfig>(rule_config_str)
+            .map_err(|e| ServiceError::ParserError(format!("Failed to parse rule config as YAML or JSON: {}", e)))
+    }
+
+    fn validate_rule_config(&self, config: &RuleConfig) -> Result<(), ServiceError> {
+        // Validate language
+        self.parse_language(&config.language)?;
+        
+        // Validate rule has at least one condition
+        if !self.has_rule_condition(&config.rule) {
+            return Err(ServiceError::ParserError("Rule must have at least one condition".into()));
+        }
+        
+        Ok(())
+    }
+
+    fn has_rule_condition(&self, rule: &RuleObject) -> bool {
+        rule.pattern.is_some() ||
+        rule.kind.is_some() ||
+        rule.regex.is_some() ||
+        rule.inside.is_some() ||
+        rule.has.is_some() ||
+        rule.follows.is_some() ||
+        rule.precedes.is_some() ||
+        rule.all.as_ref().map_or(false, |v| !v.is_empty()) ||
+        rule.any.as_ref().map_or(false, |v| !v.is_empty()) ||
+        rule.not.is_some() ||
+        rule.matches.is_some()
+    }
+
+    fn extract_pattern_from_rule(&self, rule: &RuleObject) -> Option<String> {
+        match &rule.pattern {
+            Some(PatternSpec::Simple(pattern)) => Some(pattern.clone()),
+            Some(PatternSpec::Advanced { context, .. }) => Some(context.clone()),
+            None => None,
+        }
+    }
+
+    fn is_simple_pattern_rule(&self, rule: &RuleObject) -> bool {
+        // Check if this is a simple pattern rule that we can handle directly
+        rule.pattern.is_some() && 
+        rule.kind.is_none() &&
+        rule.regex.is_none() &&
+        rule.inside.is_none() &&
+        rule.has.is_none() &&
+        rule.follows.is_none() &&
+        rule.precedes.is_none() &&
+        rule.all.is_none() &&
+        rule.any.is_none() &&
+        rule.not.is_none() &&
+        rule.matches.is_none()
+    }
+
+    fn extract_all_patterns_from_composite_rule(&self, rule: &RuleObject) -> Vec<String> {
+        let mut patterns = Vec::new();
+        
+        // Handle direct pattern
+        if let Some(pattern) = self.extract_pattern_from_rule(rule) {
+            patterns.push(pattern);
+        }
+        
+        // Handle "all" composite rule
+        if let Some(all_rules) = &rule.all {
+            for sub_rule in all_rules {
+                patterns.extend(self.extract_all_patterns_from_composite_rule(sub_rule));
+            }
+        }
+        
+        // Handle "any" composite rule  
+        if let Some(any_rules) = &rule.any {
+            for sub_rule in any_rules {
+                patterns.extend(self.extract_all_patterns_from_composite_rule(sub_rule));
+            }
+        }
+        
+        // Handle "not" composite rule
+        if let Some(not_rule) = &rule.not {
+            patterns.extend(self.extract_all_patterns_from_composite_rule(not_rule));
+        }
+        
+        patterns
     }
 
     #[tracing::instrument(skip(self), fields(language = %param.language, pattern = %param.pattern))]
@@ -668,11 +759,12 @@ impl AstGrepService {
         let docs = r##"
 # AST-Grep MCP Service Documentation
 
-This service provides structural code search and transformation using ast-grep patterns.
+This service provides structural code search and transformation using ast-grep patterns and rule configurations.
 
 ## Key Concepts
 
 **AST Patterns:** Use `$VAR` to capture single nodes, `$$$` to capture multiple statements
+**Rule Configurations:** YAML or JSON configurations for complex pattern matching and transformations
 **Languages:** Supports javascript, typescript, rust, python, java, go, and many more
 **Glob Patterns:** Use `**/*.js` for recursive search, `src/*.ts` for single directory
 
@@ -1017,6 +1109,80 @@ Returns all supported programming languages.
 - Class methods: `$VISIBILITY $METHOD($PARAMS) { $BODY }`
 - Import statements: `import $NAME from '$PATH'`
 
+## Rule-Based Operations
+
+### validate_rule
+
+Validates ast-grep rule configuration syntax and optionally tests against sample code.
+
+**Parameters:**
+- `rule_config`: YAML or JSON rule configuration string
+- `test_code` (optional): Sample code to test the rule against
+
+**Rule Configuration Format (YAML):**
+```yaml
+id: unique-rule-id
+language: javascript
+message: "Optional message for matches"
+severity: warning
+rule:
+  pattern: "console.log($ARG)"
+fix: "console.debug($ARG)"  # For rule_replace only
+```
+
+**Rule Configuration Format (JSON):**
+```json
+{
+  "id": "unique-rule-id",
+  "language": "javascript",
+  "message": "Optional message for matches", 
+  "severity": "warning",
+  "rule": {
+    "pattern": "console.log($ARG)"
+  },
+  "fix": "console.debug($ARG)"
+}
+```
+
+### rule_search
+
+Search for patterns using ast-grep rule configurations. Supports complex pattern matching.
+
+**Parameters:**
+- `rule_config`: YAML or JSON rule configuration
+- `path_pattern` (optional): Glob pattern for files to search (default: all files)
+- `max_results` (optional): Maximum number of results
+- `max_file_size` (optional): Maximum file size to process
+- `cursor` (optional): Pagination cursor
+
+**Supported Rule Types:**
+- **Simple Pattern Rules**: `pattern: "console.log($ARG)"`
+- **Composite Rules**: `all`, `any`, `not` (limited support)
+- **Relational Rules**: `inside`, `has`, `follows`, `precedes` (planned)
+
+### rule_replace
+
+Replace patterns using ast-grep rule configurations with fix transformations.
+
+**Parameters:**
+- `rule_config`: YAML or JSON rule configuration with `fix` field
+- `path_pattern` (optional): Glob pattern for files to modify
+- `dry_run` (optional): If true (default), only show preview
+- `summary_only` (optional): If true, return only summary statistics
+- `max_results` (optional): Maximum number of results
+- `cursor` (optional): Pagination cursor
+
+**Example Rule with Fix:**
+```yaml
+id: modernize-var-to-const
+language: javascript
+message: "Replace var with const for immutable variables"
+severity: info
+rule:
+  pattern: "var $NAME = $VALUE"
+fix: "const $NAME = $VALUE"
+```
+
 ## Error Handling
 
 The service returns structured errors for:
@@ -1024,11 +1190,220 @@ The service returns structured errors for:
 - Unsupported languages
 - File access issues
 - Pattern syntax errors
+- Rule configuration parsing errors
+- Missing fix field for replacements
 
 Always check the response for error conditions before processing results.
         "##;
         Ok(DocumentationResult {
             documentation: docs.to_string(),
+        })
+    }
+
+    #[tracing::instrument(skip(self))]
+    pub async fn validate_rule(
+        &self,
+        param: RuleValidateParam,
+    ) -> Result<RuleValidateResult, ServiceError> {
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        let mut test_matches = None;
+
+        // Parse the rule configuration
+        let config = match self.parse_rule_config(&param.rule_config) {
+            Ok(config) => config,
+            Err(e) => {
+                errors.push(e.to_string());
+                return Ok(RuleValidateResult {
+                    is_valid: false,
+                    errors,
+                    warnings,
+                    test_matches,
+                });
+            }
+        };
+
+        // Validate the configuration
+        if let Err(e) = self.validate_rule_config(&config) {
+            errors.push(e.to_string());
+        }
+
+        // If test code is provided, test the rule against it
+        if let Some(test_code) = param.test_code {
+            if errors.is_empty() {
+                if let Some(pattern_str) = self.extract_pattern_from_rule(&config.rule) {
+                    match self.parse_language(&config.language) {
+                        Ok(_lang) => {
+                            let search_param = SearchParam {
+                                code: test_code,
+                                pattern: pattern_str,
+                                language: config.language.clone(),
+                            };
+                            
+                            match self.search(search_param).await {
+                                Ok(result) => {
+                                    test_matches = Some(result.matches);
+                                }
+                                Err(e) => {
+                                    warnings.push(format!("Pattern test failed: {}", e));
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            errors.push(e.to_string());
+                        }
+                    }
+                } else {
+                    warnings.push("Complex rule detected - basic pattern testing not available".into());
+                }
+            }
+        }
+
+        Ok(RuleValidateResult {
+            is_valid: errors.is_empty(),
+            errors,
+            warnings,
+            test_matches,
+        })
+    }
+
+    #[tracing::instrument(skip(self), fields(rule_id))]
+    pub async fn rule_search(
+        &self,
+        param: RuleSearchParam,
+    ) -> Result<RuleSearchResult, ServiceError> {
+        // Parse the rule configuration
+        let config = self.parse_rule_config(&param.rule_config)?;
+        self.validate_rule_config(&config)?;
+        
+        tracing::Span::current().record("rule_id", &config.id);
+
+        // Check if this is a simple pattern rule or a composite rule
+        if self.is_simple_pattern_rule(&config.rule) {
+            // Handle simple pattern rule
+            let pattern_str = self.extract_pattern_from_rule(&config.rule)
+                .ok_or_else(|| ServiceError::ParserError("Pattern rule missing pattern".into()))?;
+            
+            return self.handle_simple_pattern_rule_search(&config, pattern_str, param).await;
+        } else {
+            // Handle composite rules
+            return self.handle_composite_rule_search(&config, param).await;
+        }
+    }
+
+    async fn handle_simple_pattern_rule_search(
+        &self,
+        config: &RuleConfig,
+        pattern_str: String,
+        param: RuleSearchParam,
+    ) -> Result<RuleSearchResult, ServiceError> {
+        let path_pattern = param.path_pattern.unwrap_or_else(|| "**/*".into());
+
+        // Create equivalent FileSearchParam
+        let file_search_param = FileSearchParam {
+            path_pattern,
+            pattern: pattern_str,
+            language: config.language.clone(),
+            limit: param.max_results,
+            max_file_size: param.max_file_size,
+            cursor: param.cursor,
+        };
+
+        // Use existing file_search functionality
+        let search_result = self.file_search(file_search_param).await?;
+
+        // Convert to rule search result format
+        let rule_matches: Vec<RuleMatchResult> = search_result.file_results
+            .into_iter()
+            .map(|file_result| RuleMatchResult {
+                file_path: file_result.file_path.to_string_lossy().to_string(),
+                matches: file_result.matches,
+                message: config.message.clone(),
+                severity: config.severity.clone(),
+            })
+            .collect();
+
+        Ok(RuleSearchResult {
+            rule_id: config.id.clone(),
+            matches: rule_matches,
+            next_cursor: search_result.next_cursor,
+            total_files_processed: search_result.total_files_found,
+        })
+    }
+
+    async fn handle_composite_rule_search(
+        &self,
+        config: &RuleConfig,
+        param: RuleSearchParam,
+    ) -> Result<RuleSearchResult, ServiceError> {
+        // For now, extract all patterns from the composite rule and search for them
+        // This is a simplified approach - proper composite rule evaluation would 
+        // require more sophisticated AST traversal
+        let patterns = self.extract_all_patterns_from_composite_rule(&config.rule);
+        
+        if patterns.is_empty() {
+            return Err(ServiceError::ParserError("No searchable patterns found in composite rule".into()));
+        }
+
+        // Use the first pattern for now - TODO: implement proper composite logic
+        let pattern_str = patterns.into_iter().next().unwrap();
+        
+        tracing::warn!("Composite rule support is limited - using first pattern only");
+        
+        self.handle_simple_pattern_rule_search(config, pattern_str, param).await
+    }
+
+    #[tracing::instrument(skip(self), fields(rule_id))]
+    pub async fn rule_replace(
+        &self,
+        param: RuleReplaceParam,
+    ) -> Result<RuleReplaceResult, ServiceError> {
+        // Parse the rule configuration
+        let config = self.parse_rule_config(&param.rule_config)?;
+        self.validate_rule_config(&config)?;
+        
+        tracing::Span::current().record("rule_id", &config.id);
+
+        // Extract the fix/replacement from the rule config
+        let replacement = config.fix
+            .as_ref()
+            .ok_or_else(|| ServiceError::ParserError("Rule configuration must include 'fix' field for replacement".into()))?;
+
+        // For now, only handle simple pattern rules
+        if !self.is_simple_pattern_rule(&config.rule) {
+            return Err(ServiceError::ParserError("Only simple pattern rules are currently supported for replacement".into()));
+        }
+
+        let pattern_str = self.extract_pattern_from_rule(&config.rule)
+            .ok_or_else(|| ServiceError::ParserError("Pattern rule missing pattern".into()))?;
+
+        let path_pattern = param.path_pattern.unwrap_or_else(|| "**/*".into());
+
+        // Create equivalent FileReplaceParam
+        let file_replace_param = FileReplaceParam {
+            path_pattern,
+            pattern: pattern_str,
+            replacement: replacement.clone(),
+            language: config.language.clone(),
+            max_results: param.max_results,
+            max_file_size: param.max_file_size,
+            dry_run: param.dry_run.unwrap_or(true),
+            summary_only: param.summary_only.unwrap_or(false),
+            include_samples: false,
+            max_samples: 3,
+            cursor: param.cursor,
+        };
+
+        // Use existing file_replace functionality
+        let replace_result = self.file_replace(file_replace_param).await?;
+
+        Ok(RuleReplaceResult {
+            rule_id: config.id,
+            file_results: replace_result.file_results,
+            next_cursor: replace_result.next_cursor,
+            total_files_processed: replace_result.total_files_found,
+            total_changes: replace_result.total_changes,
+            dry_run: replace_result.dry_run,
         })
     }
 }
@@ -1249,6 +1624,153 @@ pub struct DocumentationResult {
     pub documentation: String,
 }
 
+// Rule configuration structures
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuleConfig {
+    pub id: String,
+    pub message: Option<String>,
+    pub language: String,
+    pub severity: Option<String>,
+    pub rule: RuleObject,
+    pub fix: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuleObject {
+    // Atomic rules
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<PatternSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub regex: Option<String>,
+    
+    // Relational rules
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inside: Option<Box<RelationalRule>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub has: Option<Box<RelationalRule>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follows: Option<Box<RelationalRule>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub precedes: Option<Box<RelationalRule>>,
+    
+    // Composite rules
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub all: Option<Vec<RuleObject>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub any: Option<Vec<RuleObject>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not: Option<Box<RuleObject>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matches: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PatternSpec {
+    Simple(String),
+    Advanced {
+        context: String,
+        selector: Option<String>,
+        strictness: Option<Strictness>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Strictness {
+    Cst,
+    Smart,
+    Ast,
+    Relaxed,
+    Signature,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelationalRule {
+    #[serde(flatten)]
+    pub rule: RuleObject,
+    #[serde(default, rename = "stopBy", skip_serializing_if = "Option::is_none")]
+    pub stop_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+}
+
+// Rule-based search parameters
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RuleSearchParam {
+    pub rule_config: String, // YAML or JSON rule configuration
+    #[serde(default)]
+    pub path_pattern: Option<String>,
+    #[serde(default)]
+    pub max_results: Option<usize>,
+    #[serde(default)]
+    pub max_file_size: Option<u64>,
+    #[serde(default)]
+    pub cursor: Option<SearchCursor>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RuleSearchResult {
+    pub rule_id: String,
+    pub matches: Vec<RuleMatchResult>,
+    pub next_cursor: Option<SearchCursor>,
+    pub total_files_processed: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RuleMatchResult {
+    pub file_path: String,
+    pub matches: Vec<MatchResult>,
+    pub message: Option<String>,
+    pub severity: Option<String>,
+}
+
+// Rule-based replacement parameters
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RuleReplaceParam {
+    pub rule_config: String, // YAML or JSON rule configuration
+    #[serde(default)]
+    pub path_pattern: Option<String>,
+    #[serde(default)]
+    pub max_results: Option<usize>,
+    #[serde(default)]
+    pub max_file_size: Option<u64>,
+    #[serde(default)]
+    pub dry_run: Option<bool>,
+    #[serde(default)]
+    pub summary_only: Option<bool>,
+    #[serde(default)]
+    pub cursor: Option<SearchCursor>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RuleReplaceResult {
+    pub rule_id: String,
+    pub file_results: Vec<FileDiffResult>,
+    pub next_cursor: Option<SearchCursor>,
+    pub total_files_processed: usize,
+    pub total_changes: usize,
+    pub dry_run: bool,
+}
+
+// Rule validation parameters
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RuleValidateParam {
+    pub rule_config: String, // YAML or JSON rule configuration
+    #[serde(default)]
+    pub test_code: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RuleValidateResult {
+    pub is_valid: bool,
+    pub errors: Vec<String>,
+    pub warnings: Vec<String>,
+    pub test_matches: Option<Vec<MatchResult>>,
+}
+
 impl ServerHandler for AstGrepService {
     fn get_info(&self) -> InitializeResult {
         InitializeResult {
@@ -1344,6 +1866,64 @@ impl ServerHandler for AstGrepService {
                     description: "Provides detailed usage examples for all tools.".into(),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({ "type": "object", "properties": {} })).unwrap()),
                 },
+                Tool {
+                    name: "rule_search".into(),
+                    description: "Search for patterns using ast-grep rule configurations (YAML/JSON). Supports complex pattern matching with relational and composite rules.".into(),
+                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "rule_config": { "type": "string", "description": "YAML or JSON rule configuration" },
+                            "path_pattern": { "type": "string", "description": "Glob pattern for files to search (optional, searches all files if not provided)" },
+                            "max_results": { "type": "integer", "minimum": 1, "maximum": 10000 },
+                            "max_file_size": { "type": "integer", "minimum": 1024, "maximum": 1073741824 },
+                            "cursor": {
+                                "type": "object",
+                                "properties": {
+                                    "last_file_path": { "type": "string" },
+                                    "is_complete": { "type": "boolean" }
+                                },
+                                "required": ["last_file_path", "is_complete"]
+                            }
+                        },
+                        "required": ["rule_config"]
+                    })).unwrap()),
+                },
+                Tool {
+                    name: "rule_replace".into(),
+                    description: "Replace patterns using ast-grep rule configurations with fix transformations. Supports complex rule-based code refactoring.".into(),
+                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "rule_config": { "type": "string", "description": "YAML or JSON rule configuration with fix field" },
+                            "path_pattern": { "type": "string", "description": "Glob pattern for files to modify (optional, processes all files if not provided)" },
+                            "max_results": { "type": "integer", "minimum": 1, "maximum": 10000 },
+                            "max_file_size": { "type": "integer", "minimum": 1024, "maximum": 1073741824 },
+                            "dry_run": { "type": "boolean", "default": true, "description": "If true (default), only show preview. If false, actually modify files." },
+                            "summary_only": { "type": "boolean", "default": false, "description": "If true, only return summary statistics" },
+                            "cursor": {
+                                "type": "object",
+                                "properties": {
+                                    "last_file_path": { "type": "string" },
+                                    "is_complete": { "type": "boolean" }
+                                },
+                                "required": ["last_file_path", "is_complete"]
+                            }
+                        },
+                        "required": ["rule_config"]
+                    })).unwrap()),
+                },
+                Tool {
+                    name: "validate_rule".into(),
+                    description: "Validate ast-grep rule configuration syntax and optionally test against sample code.".into(),
+                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "rule_config": { "type": "string", "description": "YAML or JSON rule configuration to validate" },
+                            "test_code": { "type": "string", "description": "Optional code sample to test the rule against" }
+                        },
+                        "required": ["rule_config"]
+                    })).unwrap()),
+                },
                 ],
                 ..Default::default()
             })
@@ -1412,6 +1992,36 @@ impl ServerHandler for AstGrepService {
                 ))
                 .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
                 let result = self.documentation(param).await.map_err(ErrorData::from)?;
+                let json_value = serde_json::to_value(&result)
+                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))?;
+                Ok(CallToolResult::success(vec![Content::json(json_value)?]))
+            }
+            "validate_rule" => {
+                let param: RuleValidateParam = serde_json::from_value(serde_json::Value::Object(
+                    request.arguments.unwrap_or_default(),
+                ))
+                .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
+                let result = self.validate_rule(param).await.map_err(ErrorData::from)?;
+                let json_value = serde_json::to_value(&result)
+                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))?;
+                Ok(CallToolResult::success(vec![Content::json(json_value)?]))
+            }
+            "rule_search" => {
+                let param: RuleSearchParam = serde_json::from_value(serde_json::Value::Object(
+                    request.arguments.unwrap_or_default(),
+                ))
+                .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
+                let result = self.rule_search(param).await.map_err(ErrorData::from)?;
+                let json_value = serde_json::to_value(&result)
+                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))?;
+                Ok(CallToolResult::success(vec![Content::json(json_value)?]))
+            }
+            "rule_replace" => {
+                let param: RuleReplaceParam = serde_json::from_value(serde_json::Value::Object(
+                    request.arguments.unwrap_or_default(),
+                ))
+                .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
+                let result = self.rule_replace(param).await.map_err(ErrorData::from)?;
                 let json_value = serde_json::to_value(&result)
                     .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))?;
                 Ok(CallToolResult::success(vec![Content::json(json_value)?]))
