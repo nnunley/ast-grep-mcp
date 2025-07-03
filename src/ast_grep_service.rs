@@ -363,14 +363,16 @@ impl AstGrepService {
             .find_all(pattern)
             .map(|node| {
                 let vars: HashMap<String, String> = node.get_env().clone().into();
-                // TODO: Implement proper position extraction from node.range()
+                let range = node.range();
+                let (start_line, start_col) = self.byte_offset_to_line_col(code, range.start_byte);
+                let (end_line, end_col) = self.byte_offset_to_line_col(code, range.end_byte);
                 MatchResult {
                     text: node.text().to_string(),
                     vars,
-                    start_line: 1,
-                    end_line: 1,
-                    start_col: 0,
-                    end_col: node.text().len(),
+                    start_line,
+                    end_line,
+                    start_col,
+                    end_col,
                 }
             })
             .collect();
@@ -720,14 +722,16 @@ impl AstGrepService {
             .find_all(pattern)
             .map(|node| {
                 let vars: HashMap<String, String> = node.get_env().clone().into();
-                // TODO: Implement proper position extraction from node.range()
+                let range = node.range();
+                let (start_line, start_col) = self.byte_offset_to_line_col(code, range.start_byte);
+                let (end_line, end_col) = self.byte_offset_to_line_col(code, range.end_byte);
                 MatchResult {
                     text: node.text().to_string(),
                     vars,
-                    start_line: 1,
-                    end_line: 1,
-                    start_col: 0,
-                    end_col: node.text().len(),
+                    start_line,
+                    end_line,
+                    start_col,
+                    end_col,
                 }
             })
             .collect();
@@ -890,14 +894,16 @@ impl AstGrepService {
             .find_all(pattern)
             .map(|node| {
                 let vars: HashMap<String, String> = node.get_env().clone().into();
-                // TODO: Implement proper position extraction from node.range()
+                let range = node.range();
+                let (start_line, start_col) = self.byte_offset_to_line_col(code, range.start_byte);
+                let (end_line, end_col) = self.byte_offset_to_line_col(code, range.end_byte);
                 MatchResult {
                     text: node.text().to_string(),
                     vars,
-                    start_line: 1,
-                    end_line: 1,
-                    start_col: 0,
-                    end_col: node.text().len(),
+                    start_line,
+                    end_line,
+                    start_col,
+                    end_col,
                 }
             })
             .collect();
