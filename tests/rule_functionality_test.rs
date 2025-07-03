@@ -410,7 +410,7 @@ rule:
     let result = service.rule_search(param).await.unwrap();
     assert_eq!(result.rule_id, "test-composite-any");
     // Should find all three console method calls
-    assert!(result.matches.len() > 0);
+    assert!(!result.matches.is_empty());
     
     // Check that we found multiple matches
     let total_matches: usize = result.matches.iter().map(|m| m.matches.len()).sum();
