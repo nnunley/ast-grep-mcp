@@ -1,0 +1,7 @@
+id: no-console-log
+message: Avoid console.log in production
+language: javascript
+severity: warning
+rule:
+  pattern: console.log($ARGS)
+fix: '// TODO: Replace with proper logging'

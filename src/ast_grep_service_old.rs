@@ -1,6 +1,4 @@
 use std::{borrow::Cow, collections::HashMap, fmt, io, path::PathBuf, str::FromStr, sync::Arc, sync::Mutex, fs};
-use lru::LruCache;
-use std::num::NonZeroUsize;
 
 use ast_grep_core::{AstGrep, Pattern};
 use ast_grep_language::SupportLang as Language;
@@ -31,8 +29,6 @@ pub struct ServiceConfig {
     pub root_directories: Vec<PathBuf>,
     /// Directory for storing custom rules created by LLMs
     pub rules_directory: PathBuf,
-    /// Maximum number of compiled patterns to cache (default: 1000)
-    pub pattern_cache_size: usize,
 }
 
 impl Default for ServiceConfig {
@@ -43,7 +39,6 @@ impl Default for ServiceConfig {
             limit: 100,
             root_directories: vec![std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))],
             rules_directory: PathBuf::from(".ast-grep-rules"),
-            pattern_cache_size: 1000, // Cache up to 1000 compiled patterns
         }
     }
 }
@@ -51,7 +46,7 @@ impl Default for ServiceConfig {
 #[derive(Clone)]
 pub struct AstGrepService {
     config: ServiceConfig,
-    pattern_cache: Arc<Mutex<LruCache<String, Pattern>>>,
+    pattern_cache: Arc<Mutex<HashMap<String, Pattern>>>,
 }
 
 #[derive(Debug)]
@@ -127,20 +122,17 @@ impl AstGrepService {
     }
 
     pub fn new() -> Self {
-        let config = ServiceConfig::default();
-        let cache_size = NonZeroUsize::new(config.pattern_cache_size).unwrap_or(NonZeroUsize::new(1000).unwrap());
         Self {
-            config,
-            pattern_cache: Arc::new(Mutex::new(LruCache::new(cache_size))),
+            config: ServiceConfig::default(),
+            pattern_cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
     #[allow(dead_code)]
     pub fn with_config(config: ServiceConfig) -> Self {
-        let cache_size = NonZeroUsize::new(config.pattern_cache_size).unwrap_or(NonZeroUsize::new(1000).unwrap());
         Self { 
             config,
-            pattern_cache: Arc::new(Mutex::new(LruCache::new(cache_size))),
+            pattern_cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -154,7 +146,7 @@ impl AstGrepService {
         let cache_key = format!("{}:{}", lang as u8, pattern_str);
         
         // First try to get from cache
-        if let Ok(mut cache) = self.pattern_cache.lock() {
+        if let Ok(cache) = self.pattern_cache.lock() {
             if let Some(pattern) = cache.get(&cache_key) {
                 return Ok(pattern.clone());
             }
@@ -165,20 +157,14 @@ impl AstGrepService {
         
         // Try to add to cache (ignore if lock fails)
         if let Ok(mut cache) = self.pattern_cache.lock() {
-            cache.put(cache_key, pattern.clone());
+            // Limit cache size to prevent memory bloat
+            if cache.len() >= 1000 {
+                cache.clear();
+            }
+            cache.insert(cache_key, pattern.clone());
         }
 
         Ok(pattern)
-    }
-
-    /// Get pattern cache statistics for monitoring and debugging
-    #[allow(dead_code)]
-    pub fn get_cache_stats(&self) -> (usize, usize) {
-        if let Ok(cache) = self.pattern_cache.lock() {
-            (cache.len(), cache.cap().get())
-        } else {
-            (0, 0)
-        }
     }
 
     fn parse_rule_config(&self, rule_config_str: &str) -> Result<RuleConfig, ServiceError> {
@@ -1908,7 +1894,7 @@ fix: "// TODO: Replace with proper logging: console.log($VAR)"
         // Use the existing create_rule method to store the imported rule
         let create_param = CreateRuleParam {
             rule_config: mock_rule_config,
-            overwrite: Some(false),
+            overwrite: false,
         };
 
         match self.create_rule(create_param).await {
@@ -2965,7 +2951,6 @@ mod tests {
             limit: 10,
             root_directories: vec![std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))],
             rules_directory: PathBuf::from(".test-rules"),
-            pattern_cache_size: 500, // Smaller cache for testing
         };
 
         let service = AstGrepService::with_config(custom_config);
@@ -3068,48 +3053,5 @@ mod tests {
         // Verify cache has the pattern (cache should have 1 entry)
         let cache = service.pattern_cache.lock().unwrap();
         assert_eq!(cache.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn test_lru_cache_eviction() {
-        // Create service with very small cache for testing
-        let config = ServiceConfig {
-            pattern_cache_size: 2, // Only 2 patterns max
-            ..Default::default()
-        };
-        let service = AstGrepService::with_config(config);
-
-        let code = "console.log('test');";
-        
-        // Add first pattern
-        let _ = service.search(SearchParam {
-            code: code.into(),
-            pattern: "console.log($VAR)".into(),
-            language: "javascript".into(),
-        }).await.unwrap();
-        
-        // Add second pattern 
-        let _ = service.search(SearchParam {
-            code: code.into(),
-            pattern: "console.$METHOD($VAR)".into(),
-            language: "javascript".into(),
-        }).await.unwrap();
-        
-        // Cache should have 2 entries
-        let (used, capacity) = service.get_cache_stats();
-        assert_eq!(used, 2);
-        assert_eq!(capacity, 2);
-        
-        // Add third pattern - should evict least recently used
-        let _ = service.search(SearchParam {
-            code: code.into(), 
-            pattern: "$OBJECT.log($VAR)".into(),
-            language: "javascript".into(),
-        }).await.unwrap();
-        
-        // Cache should still have 2 entries (LRU evicted the first one)
-        let (used, capacity) = service.get_cache_stats();
-        assert_eq!(used, 2);
-        assert_eq!(capacity, 2);
     }
 }
