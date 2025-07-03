@@ -193,7 +193,7 @@ impl AstGrepService {
         Ok(GenerateAstResult {
             ast: ast_string,
             language: param.language,
-            code_length: param.code.len(),
+            code_length: param.code.chars().count(),
         })
     }
 
@@ -3439,6 +3439,6 @@ mod tests {
         assert!(result.ast.contains("identifier"));
         assert!(result.ast.contains("number"));
         assert_eq!(result.language, "javascript");
-        assert_eq!(result.code_length, 29);
+        assert_eq!(result.code_length, 30);
     }
 }
