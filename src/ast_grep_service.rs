@@ -5,7 +5,7 @@ use std::{
     sync::Mutex,
 };
 
-use ast_grep_core::{AstGrep, Pattern, tree_sitter::StrDoc};
+use ast_grep_core::{AstGrep, Pattern, Position, tree_sitter::StrDoc};
 use ast_grep_language::SupportLang as Language;
 use base64::{Engine as _, engine::general_purpose};
 use futures::stream::{self, StreamExt};
@@ -403,16 +403,15 @@ impl AstGrepService {
             .find_all(pattern)
             .map(|node| {
                 let vars: HashMap<String, String> = node.get_env().clone().into();
-                let range = node.range();
-                let (start_line, start_col) = self.byte_offset_to_line_col(code, range.start_byte);
-                let (end_line, end_col) = self.byte_offset_to_line_col(code, range.end_byte);
+                let start_pos: Position = node.get_node().start_pos();
+                let end_pos: Position = node.get_node().end_pos();
                 MatchResult {
                     text: node.text().to_string(),
                     vars,
-                    start_line,
-                    end_line,
-                    start_col,
-                    end_col,
+                    start_line: start_pos.line(),
+                    end_line: end_pos.line(),
+                    start_col: start_pos.column(&node),
+                    end_col: end_pos.column(&node),
                 }
             })
             .collect();
@@ -433,6 +432,7 @@ impl AstGrepService {
         // Create a pattern that matches anything and then filter by examining the AST
         // This is a simplified approach
         let pattern = Pattern::new("$_", lang);
+        // node.get_node() has access to most relational operators for syntax nodes.
 
         let matches: Vec<MatchResult> = ast
             .root()
@@ -822,16 +822,16 @@ impl AstGrepService {
             .find_all(pattern)
             .map(|node| {
                 let vars: HashMap<String, String> = node.get_env().clone().into();
-                let range = node.range();
-                let (start_line, start_col) = self.byte_offset_to_line_col(code, range.start_byte);
-                let (end_line, end_col) = self.byte_offset_to_line_col(code, range.end_byte);
+                let ast_node = node.get_node();
+                let start_pos = ast_node.start_pos();
+                let end_pos = ast_node.end_pos();
                 MatchResult {
                     text: node.text().to_string(),
                     vars,
-                    start_line,
-                    end_line,
-                    start_col,
-                    end_col,
+                    start_line: start_pos.line(),
+                    end_line: end_pos.line(),
+                    start_col: start_pos.column(ast_node),
+                    end_col: end_pos.column(ast_node),
                 }
             })
             .collect();
@@ -994,9 +994,11 @@ impl AstGrepService {
             .find_all(pattern)
             .map(|node| {
                 let vars: HashMap<String, String> = node.get_env().clone().into();
-                let range = node.range();
-                let (start_line, start_col) = self.byte_offset_to_line_col(code, range.start_byte);
-                let (end_line, end_col) = self.byte_offset_to_line_col(code, range.end_byte);
+                let ast_node = node.get_node();
+                let start_pos = ast_node.start_pos();
+                let end_pos = ast_node.end_pos();
+                let (start_line, start_col) = (start_pos.line(), start_pos.column(ast_node));
+                let (end_line, end_col) = (end_pos.line(), end_pos.column(ast_node));
                 MatchResult {
                     text: node.text().to_string(),
                     vars,
