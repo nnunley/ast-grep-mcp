@@ -2288,7 +2288,7 @@ Always check the response for error conditions before processing results.
             param
                 .rule_url
                 .split('/')
-                .last()
+                .next_back()
                 .unwrap_or("imported-rule")
                 .to_string()
         });
