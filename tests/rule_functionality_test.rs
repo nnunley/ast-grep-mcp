@@ -1,6 +1,6 @@
-use ast_grep_mcp::ast_grep_service::{AstGrepService, RuleValidateParam, RuleSearchParam};
-use tempfile::TempDir;
+use ast_grep_mcp::ast_grep_service::{AstGrepService, RuleSearchParam, RuleValidateParam};
 use std::fs;
+use tempfile::TempDir;
 
 #[tokio::test]
 async fn test_rule_validation() {
@@ -77,16 +77,16 @@ rule:
 #[tokio::test]
 async fn test_rule_search_basic() {
     use ast_grep_mcp::ast_grep_service::ServiceConfig;
-    
+
     let temp_dir = TempDir::new().unwrap();
-    
+
     // Create service with custom config pointing to temp directory
     let config = ServiceConfig {
         root_directories: vec![temp_dir.path().to_path_buf()],
         ..Default::default()
     };
     let service = AstGrepService::with_config(config);
-    
+
     // Create a test JavaScript file
     let test_file = temp_dir.path().join("test.js");
     fs::write(&test_file, "console.log('hello');\nconsole.error('error');").unwrap();
@@ -112,22 +112,25 @@ rule:
     assert_eq!(result.rule_id, "find-console-log");
     assert_eq!(result.matches.len(), 1); // One file with matches
     assert_eq!(result.matches[0].matches.len(), 1); // One match in the file
-    assert_eq!(result.matches[0].message, Some("Found console.log usage".to_string()));
+    assert_eq!(
+        result.matches[0].message,
+        Some("Found console.log usage".to_string())
+    );
     assert_eq!(result.matches[0].severity, Some("warning".to_string()));
 }
 
 #[tokio::test]
 async fn test_rule_search_composite_all() {
     use ast_grep_mcp::ast_grep_service::ServiceConfig;
-    
+
     let temp_dir = TempDir::new().unwrap();
-    
+
     let config = ServiceConfig {
         root_directories: vec![temp_dir.path().to_path_buf()],
         ..Default::default()
     };
     let service = AstGrepService::with_config(config);
-    
+
     // Create a test JavaScript file
     let test_file = temp_dir.path().join("test.js");
     fs::write(&test_file, "console.log('hello');\nconsole.error('error');").unwrap();
@@ -155,22 +158,22 @@ rule:
     let result = service.rule_search(param).await.unwrap();
     assert_eq!(result.rule_id, "find-console-calls");
     // Since we currently use first pattern only, we expect console.log matches
-    assert_eq!(result.matches.len(), 1); 
-    assert_eq!(result.matches[0].matches.len(), 1); 
+    assert_eq!(result.matches.len(), 1);
+    assert_eq!(result.matches[0].matches.len(), 1);
 }
 
 #[tokio::test]
 async fn test_rule_replace_basic() {
-    use ast_grep_mcp::ast_grep_service::{ServiceConfig, RuleReplaceParam};
-    
+    use ast_grep_mcp::ast_grep_service::{RuleReplaceParam, ServiceConfig};
+
     let temp_dir = TempDir::new().unwrap();
-    
+
     let config = ServiceConfig {
         root_directories: vec![temp_dir.path().to_path_buf()],
         ..Default::default()
     };
     let service = AstGrepService::with_config(config);
-    
+
     // Create a test JavaScript file
     let test_file = temp_dir.path().join("test.js");
     fs::write(&test_file, "console.log('hello');\nconsole.log('world');").unwrap();
@@ -204,10 +207,12 @@ fix: "console.debug($ARG)"
 
 #[tokio::test]
 async fn test_rule_management_lifecycle() {
-    use ast_grep_mcp::ast_grep_service::{ServiceConfig, CreateRuleParam, ListRulesParam, GetRuleParam, DeleteRuleParam};
-    
+    use ast_grep_mcp::ast_grep_service::{
+        CreateRuleParam, DeleteRuleParam, GetRuleParam, ListRulesParam, ServiceConfig,
+    };
+
     let temp_dir = TempDir::new().unwrap();
-    
+
     let config = ServiceConfig {
         rules_directory: temp_dir.path().join("custom-rules"),
         ..Default::default()
@@ -229,18 +234,22 @@ fix: "console.debug($ARG)"
         rule_config: yaml_rule.to_string(),
         overwrite: None,
     };
-    
+
     let create_result = service.create_rule(create_param).await.unwrap();
     assert_eq!(create_result.rule_id, "test-rule-management");
     assert!(create_result.created);
-    assert!(create_result.file_path.contains("test-rule-management.yaml"));
+    assert!(
+        create_result
+            .file_path
+            .contains("test-rule-management.yaml")
+    );
 
     // Test listing rules
     let list_param = ListRulesParam {
         language: None,
         severity: None,
     };
-    
+
     let list_result = service.list_rules(list_param).await.unwrap();
     assert_eq!(list_result.rules.len(), 1);
     assert_eq!(list_result.rules[0].id, "test-rule-management");
@@ -251,7 +260,7 @@ fix: "console.debug($ARG)"
     let get_param = GetRuleParam {
         rule_id: "test-rule-management".to_string(),
     };
-    
+
     let get_result = service.get_rule(get_param).await.unwrap();
     assert!(get_result.rule_config.contains("test-rule-management"));
     assert!(get_result.rule_config.contains("console.log"));
@@ -260,22 +269,28 @@ fix: "console.debug($ARG)"
     let delete_param = DeleteRuleParam {
         rule_id: "test-rule-management".to_string(),
     };
-    
+
     let delete_result = service.delete_rule(delete_param).await.unwrap();
     assert_eq!(delete_result.rule_id, "test-rule-management");
     assert!(delete_result.deleted);
 
     // Verify rule is gone
-    let list_result_after = service.list_rules(ListRulesParam { language: None, severity: None }).await.unwrap();
+    let list_result_after = service
+        .list_rules(ListRulesParam {
+            language: None,
+            severity: None,
+        })
+        .await
+        .unwrap();
     assert_eq!(list_result_after.rules.len(), 0);
 }
 
 #[tokio::test]
 async fn test_rule_creation_with_overwrite() {
-    use ast_grep_mcp::ast_grep_service::{ServiceConfig, CreateRuleParam};
-    
+    use ast_grep_mcp::ast_grep_service::{CreateRuleParam, ServiceConfig};
+
     let temp_dir = TempDir::new().unwrap();
-    
+
     let config = ServiceConfig {
         rules_directory: temp_dir.path().join("custom-rules"),
         ..Default::default()
@@ -300,49 +315,64 @@ fix: "console.debug($ARG)"
 "#;
 
     // Create initial rule
-    let create_result1 = service.create_rule(CreateRuleParam {
-        rule_config: rule_v1.to_string(),
-        overwrite: None,
-    }).await.unwrap();
+    let create_result1 = service
+        .create_rule(CreateRuleParam {
+            rule_config: rule_v1.to_string(),
+            overwrite: None,
+        })
+        .await
+        .unwrap();
     assert!(create_result1.created);
 
     // Try to create again without overwrite - should fail
-    let create_result2 = service.create_rule(CreateRuleParam {
-        rule_config: rule_v2.to_string(),
-        overwrite: Some(false),
-    }).await;
+    let create_result2 = service
+        .create_rule(CreateRuleParam {
+            rule_config: rule_v2.to_string(),
+            overwrite: Some(false),
+        })
+        .await;
     assert!(create_result2.is_err());
 
     // Create with overwrite - should succeed
-    let create_result3 = service.create_rule(CreateRuleParam {
-        rule_config: rule_v2.to_string(),
-        overwrite: Some(true),
-    }).await.unwrap();
+    let create_result3 = service
+        .create_rule(CreateRuleParam {
+            rule_config: rule_v2.to_string(),
+            overwrite: Some(true),
+        })
+        .await
+        .unwrap();
     assert!(!create_result3.created); // Should be false since it was updated
 
     // Verify the rule was updated
-    let get_result = service.get_rule(ast_grep_mcp::ast_grep_service::GetRuleParam {
-        rule_id: "test-overwrite".to_string(),
-    }).await.unwrap();
+    let get_result = service
+        .get_rule(ast_grep_mcp::ast_grep_service::GetRuleParam {
+            rule_id: "test-overwrite".to_string(),
+        })
+        .await
+        .unwrap();
     assert!(get_result.rule_config.contains("Version 2"));
     assert!(get_result.rule_config.contains("fix:"));
 }
 
 #[tokio::test]
 async fn test_composite_rule_all() {
-    use ast_grep_mcp::ast_grep_service::{ServiceConfig, RuleSearchParam};
-    
+    use ast_grep_mcp::ast_grep_service::{RuleSearchParam, ServiceConfig};
+
     let temp_dir = TempDir::new().unwrap();
-    
+
     let config = ServiceConfig {
         root_directories: vec![temp_dir.path().to_path_buf()],
         ..Default::default()
     };
     let service = AstGrepService::with_config(config);
-    
+
     // Create a test JavaScript file
     let test_file = temp_dir.path().join("test.js");
-    fs::write(&test_file, "console.log('hello');\nfunction test() { console.error('error'); }").unwrap();
+    fs::write(
+        &test_file,
+        "console.log('hello');\nfunction test() { console.error('error'); }",
+    )
+    .unwrap();
 
     // Test "all" composite rule - should find nodes that match ALL patterns
     let yaml_rule = r#"
@@ -372,19 +402,23 @@ rule:
 
 #[tokio::test]
 async fn test_composite_rule_any() {
-    use ast_grep_mcp::ast_grep_service::{ServiceConfig, RuleSearchParam};
-    
+    use ast_grep_mcp::ast_grep_service::{RuleSearchParam, ServiceConfig};
+
     let temp_dir = TempDir::new().unwrap();
-    
+
     let config = ServiceConfig {
         root_directories: vec![temp_dir.path().to_path_buf()],
         ..Default::default()
     };
     let service = AstGrepService::with_config(config);
-    
+
     // Create a test JavaScript file
     let test_file = temp_dir.path().join("test.js");
-    fs::write(&test_file, "console.log('hello');\nconsole.error('error');\nconsole.warn('warning');").unwrap();
+    fs::write(
+        &test_file,
+        "console.log('hello');\nconsole.error('error');\nconsole.warn('warning');",
+    )
+    .unwrap();
 
     // Test "any" composite rule - should find nodes that match ANY pattern
     let yaml_rule = r#"
@@ -411,7 +445,7 @@ rule:
     assert_eq!(result.rule_id, "test-composite-any");
     // Should find all three console method calls
     assert!(!result.matches.is_empty());
-    
+
     // Check that we found multiple matches
     let total_matches: usize = result.matches.iter().map(|m| m.matches.len()).sum();
     assert_eq!(total_matches, 3); // Three console calls
@@ -419,19 +453,23 @@ rule:
 
 #[tokio::test]
 async fn test_composite_rule_not() {
-    use ast_grep_mcp::ast_grep_service::{ServiceConfig, RuleSearchParam};
-    
+    use ast_grep_mcp::ast_grep_service::{RuleSearchParam, ServiceConfig};
+
     let temp_dir = TempDir::new().unwrap();
-    
+
     let config = ServiceConfig {
         root_directories: vec![temp_dir.path().to_path_buf()],
         ..Default::default()
     };
     let service = AstGrepService::with_config(config);
-    
+
     // Create a test JavaScript file
     let test_file = temp_dir.path().join("test.js");
-    fs::write(&test_file, "console.log('hello');\nfunction test() { return 42; }").unwrap();
+    fs::write(
+        &test_file,
+        "console.log('hello');\nfunction test() { return 42; }",
+    )
+    .unwrap();
 
     // Test "not" composite rule - should find nodes that DON'T match the pattern
     let yaml_rule = r#"
@@ -460,19 +498,23 @@ rule:
 
 #[tokio::test]
 async fn test_rule_with_regex() {
-    use ast_grep_mcp::ast_grep_service::{ServiceConfig, RuleSearchParam};
-    
+    use ast_grep_mcp::ast_grep_service::{RuleSearchParam, ServiceConfig};
+
     let temp_dir = TempDir::new().unwrap();
-    
+
     let config = ServiceConfig {
         root_directories: vec![temp_dir.path().to_path_buf()],
         ..Default::default()
     };
     let service = AstGrepService::with_config(config);
-    
+
     // Create a test JavaScript file
     let test_file = temp_dir.path().join("test.js");
-    fs::write(&test_file, "const ERROR_CODE = 500;\nconst SUCCESS_CODE = 200;").unwrap();
+    fs::write(
+        &test_file,
+        "const ERROR_CODE = 500;\nconst SUCCESS_CODE = 200;",
+    )
+    .unwrap();
 
     // Test regex rule
     let yaml_rule = r#"
@@ -496,5 +538,10 @@ rule:
     assert_eq!(result.rule_id, "test-regex-rule");
     // Should find the ERROR text
     assert!(!result.matches.is_empty());
-    assert!(result.matches[0].matches.iter().any(|m| m.text.contains("ERROR")));
+    assert!(
+        result.matches[0]
+            .matches
+            .iter()
+            .any(|m| m.text.contains("ERROR"))
+    );
 }
