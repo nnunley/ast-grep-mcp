@@ -18,9 +18,7 @@ async fn main() -> Result<()> {
     tracing::info!("Starting MCP server");
 
     // Create an instance of our ast-grep service
-    let service = AstGrepService::new()
-        .serve(stdio())
-        .await?;
+    let service = AstGrepService::new().serve(stdio()).await?;
 
     tracing::info!("Service started, waiting for connections");
     service.waiting().await?;
