@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::HashMap, fmt, io, path::PathBuf, str::FromStr, sync::Arc, sync::Mutex};
+use std::{borrow::Cow, collections::HashMap, fmt, io, path::PathBuf, str::FromStr, sync::Arc, sync::Mutex, fs};
 
 use ast_grep_core::{AstGrep, Pattern};
 use ast_grep_language::SupportLang as Language;
@@ -28,6 +28,8 @@ pub struct ServiceConfig {
     pub limit: usize,
     /// Root directories for file search (defaults to current working directory)
     pub root_directories: Vec<PathBuf>,
+    /// Directory for storing custom rules created by LLMs
+    pub rules_directory: PathBuf,
 }
 
 impl Default for ServiceConfig {
@@ -37,6 +39,7 @@ impl Default for ServiceConfig {
             max_concurrency: 10,
             limit: 100,
             root_directories: vec![std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))],
+            rules_directory: PathBuf::from(".ast-grep-rules"),
         }
     }
 }
@@ -1183,6 +1186,66 @@ rule:
 fix: "const $NAME = $VALUE"
 ```
 
+## Rule Management for LLMs
+
+The service provides comprehensive rule management capabilities allowing LLMs to create, store, and reuse custom rule configurations.
+
+### create_rule
+
+Create and store a new ast-grep rule configuration for reuse. LLMs can build custom rule libraries.
+
+**Parameters:**
+- `rule_config`: YAML or JSON rule configuration to create
+- `overwrite` (optional): Whether to overwrite existing rule with same ID (default: false)
+
+**Usage:**
+```json
+{
+  "rule_config": "id: my-custom-rule\nlanguage: typescript\nmessage: \"Custom rule\"\nrule:\n  pattern: \"$VAR as any\"\nfix: \"$VAR as unknown\"",
+  "overwrite": false
+}
+```
+
+### list_rules
+
+List all stored rule configurations with optional filtering.
+
+**Parameters:**
+- `language` (optional): Filter rules by programming language
+- `severity` (optional): Filter rules by severity level (info, warning, error)
+
+**Returns:** Array of rule information including ID, language, message, severity, file path, and whether it has a fix.
+
+### get_rule
+
+Retrieve a specific stored rule configuration by ID.
+
+**Parameters:**
+- `rule_id`: ID of the rule to retrieve
+
+**Returns:** Full rule configuration as YAML string and file path.
+
+### delete_rule
+
+Delete a stored rule configuration by ID.
+
+**Parameters:**
+- `rule_id`: ID of the rule to delete
+
+**Returns:** Confirmation of deletion with rule ID and file path.
+
+**Rule Storage:**
+- Rules are stored as YAML files in `.ast-grep-rules/` directory
+- Each rule is saved as `{rule-id}.yaml`
+- Directory is created automatically when first rule is saved
+- Rules persist between server restarts
+
+**LLM Workflow Example:**
+1. Create a custom rule: `create_rule` with your pattern and fix
+2. Test the rule: `validate_rule` with sample code
+3. Apply the rule: `rule_search` or `rule_replace` using the stored rule ID
+4. Manage rules: `list_rules`, `get_rule`, `delete_rule` as needed
+
 ## Error Handling
 
 The service returns structured errors for:
@@ -1404,6 +1467,152 @@ Always check the response for error conditions before processing results.
             total_files_processed: replace_result.total_files_found,
             total_changes: replace_result.total_changes,
             dry_run: replace_result.dry_run,
+        })
+    }
+
+    fn ensure_rules_directory(&self) -> Result<(), ServiceError> {
+        if !self.config.rules_directory.exists() {
+            fs::create_dir_all(&self.config.rules_directory)?;
+        }
+        Ok(())
+    }
+
+    fn get_rule_file_path(&self, rule_id: &str) -> PathBuf {
+        self.config.rules_directory.join(format!("{}.yaml", rule_id))
+    }
+
+    #[tracing::instrument(skip(self), fields(rule_id))]
+    pub async fn create_rule(
+        &self,
+        param: CreateRuleParam,
+    ) -> Result<CreateRuleResult, ServiceError> {
+        // Parse and validate the rule configuration
+        let config = self.parse_rule_config(&param.rule_config)?;
+        self.validate_rule_config(&config)?;
+        
+        tracing::Span::current().record("rule_id", &config.id);
+
+        // Ensure rules directory exists
+        self.ensure_rules_directory()?;
+
+        let file_path = self.get_rule_file_path(&config.id);
+        let exists = file_path.exists();
+
+        // Check if rule exists and overwrite is not allowed
+        if exists && !param.overwrite.unwrap_or(false) {
+            return Err(ServiceError::Internal(format!("Rule '{}' already exists. Use overwrite=true to replace it.", config.id)));
+        }
+
+        // Write rule to file as YAML
+        let yaml_content = serde_yaml::to_string(&config)
+            .map_err(|e| ServiceError::Internal(format!("Failed to serialize rule to YAML: {}", e)))?;
+        
+        fs::write(&file_path, yaml_content)?;
+
+        Ok(CreateRuleResult {
+            rule_id: config.id,
+            file_path: file_path.to_string_lossy().to_string(),
+            created: !exists,
+        })
+    }
+
+    #[tracing::instrument(skip(self))]
+    pub async fn list_rules(
+        &self,
+        param: ListRulesParam,
+    ) -> Result<ListRulesResult, ServiceError> {
+        // Ensure rules directory exists
+        self.ensure_rules_directory()?;
+
+        let mut rules = Vec::new();
+
+        // Read all YAML files in rules directory
+        for entry in fs::read_dir(&self.config.rules_directory)? {
+            let entry = entry?;
+            let path = entry.path();
+            
+            if path.extension().map_or(false, |ext| ext == "yaml" || ext == "yml") {
+                match self.load_rule_from_file(&path) {
+                    Ok(config) => {
+                        // Apply filters
+                        if let Some(lang_filter) = &param.language {
+                            if config.language != *lang_filter {
+                                continue;
+                            }
+                        }
+                        
+                        if let Some(severity_filter) = &param.severity {
+                            if config.severity.as_ref() != Some(severity_filter) {
+                                continue;
+                            }
+                        }
+
+                        rules.push(RuleInfo {
+                            id: config.id,
+                            language: config.language,
+                            message: config.message,
+                            severity: config.severity,
+                            file_path: path.to_string_lossy().to_string(),
+                            has_fix: config.fix.is_some(),
+                        });
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to load rule from {:?}: {}", path, e);
+                    }
+                }
+            }
+        }
+
+        // Sort rules by ID for consistent ordering
+        rules.sort_by(|a, b| a.id.cmp(&b.id));
+
+        Ok(ListRulesResult { rules })
+    }
+
+    fn load_rule_from_file(&self, path: &PathBuf) -> Result<RuleConfig, ServiceError> {
+        let content = fs::read_to_string(path)?;
+        self.parse_rule_config(&content)
+    }
+
+    #[tracing::instrument(skip(self), fields(rule_id = %param.rule_id))]
+    pub async fn delete_rule(
+        &self,
+        param: DeleteRuleParam,
+    ) -> Result<DeleteRuleResult, ServiceError> {
+        let file_path = self.get_rule_file_path(&param.rule_id);
+
+        if file_path.exists() {
+            fs::remove_file(&file_path)?;
+            Ok(DeleteRuleResult {
+                rule_id: param.rule_id,
+                deleted: true,
+                file_path: Some(file_path.to_string_lossy().to_string()),
+            })
+        } else {
+            Ok(DeleteRuleResult {
+                rule_id: param.rule_id,
+                deleted: false,
+                file_path: None,
+            })
+        }
+    }
+
+    #[tracing::instrument(skip(self), fields(rule_id = %param.rule_id))]
+    pub async fn get_rule(
+        &self,
+        param: GetRuleParam,
+    ) -> Result<GetRuleResult, ServiceError> {
+        let file_path = self.get_rule_file_path(&param.rule_id);
+
+        if !file_path.exists() {
+            return Err(ServiceError::Internal(format!("Rule '{}' not found", param.rule_id)));
+        }
+
+        let content = fs::read_to_string(&file_path)?;
+
+        Ok(GetRuleResult {
+            rule_config: content,
+            file_path: file_path.to_string_lossy().to_string(),
         })
     }
 }
@@ -1771,6 +1980,67 @@ pub struct RuleValidateResult {
     pub test_matches: Option<Vec<MatchResult>>,
 }
 
+// Rule management structures
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CreateRuleParam {
+    pub rule_config: String, // YAML or JSON rule configuration
+    #[serde(default)]
+    pub overwrite: Option<bool>, // Whether to overwrite existing rule with same ID
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CreateRuleResult {
+    pub rule_id: String,
+    pub file_path: String,
+    pub created: bool, // true if created, false if updated
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ListRulesParam {
+    #[serde(default)]
+    pub language: Option<String>, // Filter by language
+    #[serde(default)]
+    pub severity: Option<String>, // Filter by severity
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ListRulesResult {
+    pub rules: Vec<RuleInfo>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RuleInfo {
+    pub id: String,
+    pub language: String,
+    pub message: Option<String>,
+    pub severity: Option<String>,
+    pub file_path: String,
+    pub has_fix: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DeleteRuleParam {
+    pub rule_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DeleteRuleResult {
+    pub rule_id: String,
+    pub deleted: bool,
+    pub file_path: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GetRuleParam {
+    pub rule_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GetRuleResult {
+    pub rule_config: String,
+    pub file_path: String,
+}
+
 impl ServerHandler for AstGrepService {
     fn get_info(&self) -> InitializeResult {
         InitializeResult {
@@ -1924,6 +2194,51 @@ impl ServerHandler for AstGrepService {
                         "required": ["rule_config"]
                     })).unwrap()),
                 },
+                Tool {
+                    name: "create_rule".into(),
+                    description: "Create and store a new ast-grep rule configuration for reuse. LLMs can use this to build custom rule libraries.".into(),
+                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "rule_config": { "type": "string", "description": "YAML or JSON rule configuration to create" },
+                            "overwrite": { "type": "boolean", "default": false, "description": "Whether to overwrite existing rule with same ID" }
+                        },
+                        "required": ["rule_config"]
+                    })).unwrap()),
+                },
+                Tool {
+                    name: "list_rules".into(),
+                    description: "List all stored rule configurations with optional filtering by language or severity.".into(),
+                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "language": { "type": "string", "description": "Filter rules by programming language" },
+                            "severity": { "type": "string", "description": "Filter rules by severity level (info, warning, error)" }
+                        }
+                    })).unwrap()),
+                },
+                Tool {
+                    name: "get_rule".into(),
+                    description: "Retrieve a specific stored rule configuration by ID.".into(),
+                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "rule_id": { "type": "string", "description": "ID of the rule to retrieve" }
+                        },
+                        "required": ["rule_id"]
+                    })).unwrap()),
+                },
+                Tool {
+                    name: "delete_rule".into(),
+                    description: "Delete a stored rule configuration by ID.".into(),
+                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "rule_id": { "type": "string", "description": "ID of the rule to delete" }
+                        },
+                        "required": ["rule_id"]
+                    })).unwrap()),
+                },
                 ],
                 ..Default::default()
             })
@@ -2022,6 +2337,46 @@ impl ServerHandler for AstGrepService {
                 ))
                 .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
                 let result = self.rule_replace(param).await.map_err(ErrorData::from)?;
+                let json_value = serde_json::to_value(&result)
+                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))?;
+                Ok(CallToolResult::success(vec![Content::json(json_value)?]))
+            }
+            "create_rule" => {
+                let param: CreateRuleParam = serde_json::from_value(serde_json::Value::Object(
+                    request.arguments.unwrap_or_default(),
+                ))
+                .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
+                let result = self.create_rule(param).await.map_err(ErrorData::from)?;
+                let json_value = serde_json::to_value(&result)
+                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))?;
+                Ok(CallToolResult::success(vec![Content::json(json_value)?]))
+            }
+            "list_rules" => {
+                let param: ListRulesParam = serde_json::from_value(serde_json::Value::Object(
+                    request.arguments.unwrap_or_default(),
+                ))
+                .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
+                let result = self.list_rules(param).await.map_err(ErrorData::from)?;
+                let json_value = serde_json::to_value(&result)
+                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))?;
+                Ok(CallToolResult::success(vec![Content::json(json_value)?]))
+            }
+            "get_rule" => {
+                let param: GetRuleParam = serde_json::from_value(serde_json::Value::Object(
+                    request.arguments.unwrap_or_default(),
+                ))
+                .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
+                let result = self.get_rule(param).await.map_err(ErrorData::from)?;
+                let json_value = serde_json::to_value(&result)
+                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))?;
+                Ok(CallToolResult::success(vec![Content::json(json_value)?]))
+            }
+            "delete_rule" => {
+                let param: DeleteRuleParam = serde_json::from_value(serde_json::Value::Object(
+                    request.arguments.unwrap_or_default(),
+                ))
+                .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
+                let result = self.delete_rule(param).await.map_err(ErrorData::from)?;
                 let json_value = serde_json::to_value(&result)
                     .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))?;
                 Ok(CallToolResult::success(vec![Content::json(json_value)?]))
@@ -2181,6 +2536,7 @@ mod tests {
             max_concurrency: 5,
             limit: 10,
             root_directories: vec![std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))],
+            rules_directory: PathBuf::from(".test-rules"),
         };
 
         let service = AstGrepService::with_config(custom_config);

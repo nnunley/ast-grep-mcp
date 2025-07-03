@@ -201,3 +201,129 @@ fix: "console.debug($ARG)"
     assert!(result.dry_run); // Should be dry run
     assert_eq!(result.file_results.len(), 1); // One file processed
 }
+
+#[tokio::test]
+async fn test_rule_management_lifecycle() {
+    use ast_grep_mcp::ast_grep_service::{ServiceConfig, CreateRuleParam, ListRulesParam, GetRuleParam, DeleteRuleParam};
+    
+    let temp_dir = TempDir::new().unwrap();
+    
+    let config = ServiceConfig {
+        rules_directory: temp_dir.path().join("custom-rules"),
+        ..Default::default()
+    };
+    let service = AstGrepService::with_config(config);
+
+    let yaml_rule = r#"
+id: test-rule-management
+language: javascript
+message: "Test rule for management functionality"
+severity: warning
+rule:
+  pattern: "console.log($ARG)"
+fix: "console.debug($ARG)"
+"#;
+
+    // Test creating a rule
+    let create_param = CreateRuleParam {
+        rule_config: yaml_rule.to_string(),
+        overwrite: None,
+    };
+    
+    let create_result = service.create_rule(create_param).await.unwrap();
+    assert_eq!(create_result.rule_id, "test-rule-management");
+    assert!(create_result.created);
+    assert!(create_result.file_path.contains("test-rule-management.yaml"));
+
+    // Test listing rules
+    let list_param = ListRulesParam {
+        language: None,
+        severity: None,
+    };
+    
+    let list_result = service.list_rules(list_param).await.unwrap();
+    assert_eq!(list_result.rules.len(), 1);
+    assert_eq!(list_result.rules[0].id, "test-rule-management");
+    assert_eq!(list_result.rules[0].language, "javascript");
+    assert!(list_result.rules[0].has_fix);
+
+    // Test getting a specific rule
+    let get_param = GetRuleParam {
+        rule_id: "test-rule-management".to_string(),
+    };
+    
+    let get_result = service.get_rule(get_param).await.unwrap();
+    assert!(get_result.rule_config.contains("test-rule-management"));
+    assert!(get_result.rule_config.contains("console.log"));
+
+    // Test deleting a rule
+    let delete_param = DeleteRuleParam {
+        rule_id: "test-rule-management".to_string(),
+    };
+    
+    let delete_result = service.delete_rule(delete_param).await.unwrap();
+    assert_eq!(delete_result.rule_id, "test-rule-management");
+    assert!(delete_result.deleted);
+
+    // Verify rule is gone
+    let list_result_after = service.list_rules(ListRulesParam { language: None, severity: None }).await.unwrap();
+    assert_eq!(list_result_after.rules.len(), 0);
+}
+
+#[tokio::test]
+async fn test_rule_creation_with_overwrite() {
+    use ast_grep_mcp::ast_grep_service::{ServiceConfig, CreateRuleParam};
+    
+    let temp_dir = TempDir::new().unwrap();
+    
+    let config = ServiceConfig {
+        rules_directory: temp_dir.path().join("custom-rules"),
+        ..Default::default()
+    };
+    let service = AstGrepService::with_config(config);
+
+    let rule_v1 = r#"
+id: test-overwrite
+language: javascript
+message: "Version 1"
+rule:
+  pattern: "console.log($ARG)"
+"#;
+
+    let rule_v2 = r#"
+id: test-overwrite
+language: javascript
+message: "Version 2"
+rule:
+  pattern: "console.log($ARG)"
+fix: "console.debug($ARG)"
+"#;
+
+    // Create initial rule
+    let create_result1 = service.create_rule(CreateRuleParam {
+        rule_config: rule_v1.to_string(),
+        overwrite: None,
+    }).await.unwrap();
+    assert!(create_result1.created);
+
+    // Try to create again without overwrite - should fail
+    let create_result2 = service.create_rule(CreateRuleParam {
+        rule_config: rule_v2.to_string(),
+        overwrite: Some(false),
+    }).await;
+    assert!(create_result2.is_err());
+
+    // Create with overwrite - should succeed
+    let create_result3 = service.create_rule(CreateRuleParam {
+        rule_config: rule_v2.to_string(),
+        overwrite: Some(true),
+    }).await.unwrap();
+    assert!(!create_result3.created); // Should be false since it was updated
+
+    // Verify the rule was updated
+    let get_result = service.get_rule(ast_grep_mcp::ast_grep_service::GetRuleParam {
+        rule_id: "test-overwrite".to_string(),
+    }).await.unwrap();
+    assert!(get_result.rule_config.contains("Version 2"));
+    assert!(get_result.rule_config.contains("fix:"));
+}
