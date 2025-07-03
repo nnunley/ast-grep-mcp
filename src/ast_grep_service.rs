@@ -2,7 +2,7 @@ use std::{borrow::Cow, collections::HashMap, fmt, io, path::PathBuf, str::FromSt
 use lru::LruCache;
 use std::num::NonZeroUsize;
 
-use ast_grep_core::{AstGrep, Pattern};
+use ast_grep_core::{AstGrep, Pattern, tree_sitter::StrDoc};
 use ast_grep_language::SupportLang as Language;
 use base64::{Engine as _, engine::general_purpose};
 use futures::stream::{self, StreamExt};
@@ -181,6 +181,46 @@ impl AstGrepService {
         }
     }
 
+    /// Generate a stringified syntax tree for the given code and language
+    /// This exposes the Tree-sitter AST structure for debugging and understanding
+    pub async fn generate_ast(&self, param: GenerateAstParam) -> Result<GenerateAstResult, ServiceError> {
+        let lang = self.parse_language(&param.language)?;
+        let ast = AstGrep::new(&param.code, lang);
+        
+        // Build a string representation of the AST
+        let ast_string = self.build_ast_string(ast.root(), 0);
+        
+        Ok(GenerateAstResult {
+            ast: ast_string,
+            language: param.language,
+            code_length: param.code.len(),
+        })
+    }
+
+    /// Recursively build a string representation of the AST
+    fn build_ast_string<D: ast_grep_core::Doc>(&self, node: ast_grep_core::Node<D>, depth: usize) -> String {
+        let indent = "  ".repeat(depth);
+        let mut result = format!("{}{}[{}:{}]", indent, node.kind(), node.range().start, node.range().end);
+        
+        // Add node text if it's a leaf node or short
+        let node_text = node.text();
+        if node.children().count() == 0 || node_text.len() <= 50 {
+            let escaped_text = node_text.replace('\n', "\\n").replace('\r', "\\r");
+            if !escaped_text.trim().is_empty() {
+                result.push_str(&format!(" \"{}\"", escaped_text));
+            }
+        }
+        
+        result.push('\n');
+        
+        // Recursively add children
+        for child in node.children() {
+            result.push_str(&self.build_ast_string(child, depth + 1));
+        }
+        
+        result
+    }
+
     fn parse_rule_config(&self, rule_config_str: &str) -> Result<RuleConfig, ServiceError> {
         // First try to parse as YAML
         if let Ok(config) = serde_yaml::from_str::<RuleConfig>(rule_config_str) {
@@ -292,6 +332,18 @@ impl AstGrepService {
         } else if let Some(regex) = &rule.regex {
             // Regex rule - match nodes by text content
             self.evaluate_regex_rule(regex, code, lang)
+        } else if let Some(inside_rule) = &rule.inside {
+            // Inside relational rule - match nodes inside another pattern
+            self.evaluate_inside_rule(inside_rule, code, lang)
+        } else if let Some(has_rule) = &rule.has {
+            // Has relational rule - match nodes that contain another pattern
+            self.evaluate_has_rule(has_rule, code, lang)
+        } else if let Some(follows_rule) = &rule.follows {
+            // Follows relational rule - match nodes that follow another pattern
+            self.evaluate_follows_rule(follows_rule, code, lang)
+        } else if let Some(precedes_rule) = &rule.precedes {
+            // Precedes relational rule - match nodes that precede another pattern
+            self.evaluate_precedes_rule(precedes_rule, code, lang)
         } else {
             Err(ServiceError::ParserError("Rule must have at least one condition".into()))
         }
@@ -311,9 +363,14 @@ impl AstGrepService {
             .find_all(pattern)
             .map(|node| {
                 let vars: HashMap<String, String> = node.get_env().clone().into();
+                // TODO: Implement proper position extraction from node.range()
                 MatchResult {
                     text: node.text().to_string(),
                     vars,
+                    start_line: 1,
+                    end_line: 1,
+                    start_col: 0,
+                    end_col: node.text().len(),
                 }
             })
             .collect();
@@ -338,12 +395,16 @@ impl AstGrepService {
                 // Note: Direct kind checking may not be available, so we'll use text matching as fallback
                 let text = node.text().to_string();
                 let vars: HashMap<String, String> = node.get_env().clone().into();
-                
                 // For now, include all matches since we can't easily check AST node kind
                 // This is a simplified implementation
+                // TODO: Implement proper position extraction from node.range()
                 MatchResult {
-                    text,
+                    text: text.clone(),
                     vars,
+                    start_line: 1,
+                    end_line: 1,
+                    start_col: 0,
+                    end_col: text.len(),
                 }
             })
             .collect();
@@ -362,13 +423,209 @@ impl AstGrepService {
         
         // Find all matches in the code
         for mat in regex.find_iter(code) {
+            // Calculate line and column positions from byte offsets
+            let start_byte = mat.start();
+            let end_byte = mat.end();
+            let (start_line, start_col) = self.byte_offset_to_line_col(code, start_byte);
+            let (end_line, end_col) = self.byte_offset_to_line_col(code, end_byte);
+            
             matches.push(MatchResult {
                 text: mat.as_str().to_string(),
                 vars: HashMap::new(),
+                start_line,
+                end_line,
+                start_col,
+                end_col,
             });
         }
         
         Ok(matches)
+    }
+
+    // Relational rule evaluation methods
+    
+    fn evaluate_inside_rule(&self, inside_rule: &RelationalRule, code: &str, lang: Language) -> Result<Vec<MatchResult>, ServiceError> {
+        let ast = AstGrep::new(code, lang);
+        
+        // Get matches for the container pattern
+        let container_matches = self.evaluate_rule_against_code(&inside_rule.rule, code, lang)?;
+        
+        // Get all possible target matches (from the main pattern in the parent rule)
+        // For now, we'll search for a generic pattern to find candidate nodes
+        let all_nodes = self.get_all_nodes(&ast, lang)?;
+        
+        let mut inside_matches = Vec::new();
+        
+        // Check which nodes are inside the container matches
+        for node in all_nodes {
+            for container in &container_matches {
+                if self.is_node_inside(&node, container) {
+                    inside_matches.push(node);
+                    break;
+                }
+            }
+        }
+        
+        Ok(inside_matches)
+    }
+
+    fn evaluate_has_rule(&self, has_rule: &RelationalRule, code: &str, lang: Language) -> Result<Vec<MatchResult>, ServiceError> {
+        let ast = AstGrep::new(code, lang);
+        
+        // Get matches for the child pattern we're looking for
+        let child_matches = self.evaluate_rule_against_code(&has_rule.rule, code, lang)?;
+        
+        if child_matches.is_empty() {
+            return Ok(vec![]);
+        }
+        
+        // Get all possible parent nodes
+        let all_nodes = self.get_all_nodes(&ast, lang)?;
+        
+        let mut has_matches = Vec::new();
+        
+        // Check which nodes contain the child matches
+        for node in all_nodes {
+            for child in &child_matches {
+                if self.node_contains(&node, child) {
+                    if !has_matches.iter().any(|m: &MatchResult| m.text == node.text) {
+                        has_matches.push(node.clone());
+                    }
+                    break;
+                }
+            }
+        }
+        
+        Ok(has_matches)
+    }
+
+    fn evaluate_follows_rule(&self, follows_rule: &RelationalRule, code: &str, lang: Language) -> Result<Vec<MatchResult>, ServiceError> {
+        let ast = AstGrep::new(code, lang);
+        
+        // Get matches for the preceding pattern
+        let preceding_matches = self.evaluate_rule_against_code(&follows_rule.rule, code, lang)?;
+        
+        if preceding_matches.is_empty() {
+            return Ok(vec![]);
+        }
+        
+        // Get all possible nodes that could follow
+        let all_nodes = self.get_all_nodes(&ast, lang)?;
+        
+        let mut follows_matches = Vec::new();
+        
+        // Check which nodes follow the preceding matches
+        for node in all_nodes {
+            for preceding in &preceding_matches {
+                if self.node_follows(&node, preceding) {
+                    follows_matches.push(node);
+                    break;
+                }
+            }
+        }
+        
+        Ok(follows_matches)
+    }
+
+    fn evaluate_precedes_rule(&self, precedes_rule: &RelationalRule, code: &str, lang: Language) -> Result<Vec<MatchResult>, ServiceError> {
+        let ast = AstGrep::new(code, lang);
+        
+        // Get matches for the following pattern
+        let following_matches = self.evaluate_rule_against_code(&precedes_rule.rule, code, lang)?;
+        
+        if following_matches.is_empty() {
+            return Ok(vec![]);
+        }
+        
+        // Get all possible nodes that could precede
+        let all_nodes = self.get_all_nodes(&ast, lang)?;
+        
+        let mut precedes_matches = Vec::new();
+        
+        // Check which nodes precede the following matches
+        for node in all_nodes {
+            for following in &following_matches {
+                if self.node_precedes(&node, following) {
+                    precedes_matches.push(node);
+                    break;
+                }
+            }
+        }
+        
+        Ok(precedes_matches)
+    }
+
+    // Helper methods for relational evaluation
+    
+    fn get_all_nodes(&self, ast: &AstGrep<StrDoc<Language>>, lang: Language) -> Result<Vec<MatchResult>, ServiceError> {
+        // Use a catch-all pattern to get all significant nodes
+        let pattern = self.get_or_create_pattern("$_", lang)?;
+        
+        let matches: Vec<MatchResult> = ast
+            .root()
+            .find_all(pattern)
+            .map(|node| {
+                let vars: HashMap<String, String> = node.get_env().clone().into();
+                let text = node.text().to_string();
+                // TODO: Implement proper position extraction from node.range()
+                MatchResult {
+                    text: text.clone(),
+                    vars,
+                    start_line: 1,
+                    end_line: 1,
+                    start_col: 0,
+                    end_col: text.len(),
+                }
+            })
+            .collect();
+
+        Ok(matches)
+    }
+
+    fn is_node_inside(&self, node: &MatchResult, container: &MatchResult) -> bool {
+        // Check if node is spatially inside container
+        node.start_line >= container.start_line && 
+        node.end_line <= container.end_line &&
+        (node.start_line > container.start_line || node.start_col >= container.start_col) &&
+        (node.end_line < container.end_line || node.end_col <= container.end_col) &&
+        !(node.start_line == container.start_line && node.start_col == container.start_col &&
+          node.end_line == container.end_line && node.end_col == container.end_col)
+    }
+
+    fn node_contains(&self, parent: &MatchResult, child: &MatchResult) -> bool {
+        // Check if parent spatially contains child
+        self.is_node_inside(child, parent)
+    }
+
+    fn node_follows(&self, node: &MatchResult, preceding: &MatchResult) -> bool {
+        // Check if node comes after preceding node
+        node.start_line > preceding.end_line || 
+        (node.start_line == preceding.end_line && node.start_col >= preceding.end_col)
+    }
+
+    fn node_precedes(&self, node: &MatchResult, following: &MatchResult) -> bool {
+        // Check if node comes before following node
+        node.end_line < following.start_line ||
+        (node.end_line == following.start_line && node.end_col <= following.start_col)
+    }
+
+    fn byte_offset_to_line_col(&self, code: &str, byte_offset: usize) -> (usize, usize) {
+        let mut line = 1;
+        let mut col = 0;
+        
+        for (i, ch) in code.char_indices() {
+            if i >= byte_offset {
+                break;
+            }
+            if ch == '\n' {
+                line += 1;
+                col = 0;
+            } else {
+                col += 1;
+            }
+        }
+        
+        (line, col)
     }
 
     fn evaluate_all_rule(&self, all_rules: &[RuleObject], code: &str, lang: Language) -> Result<Vec<MatchResult>, ServiceError> {
@@ -424,9 +681,14 @@ impl AstGrepService {
                 let text = node.text().to_string();
                 if !excluded_texts.contains(&text) {
                     let vars: HashMap<String, String> = node.get_env().clone().into();
+                    // TODO: Implement proper position extraction from node.range()
                     Some(MatchResult {
-                        text,
+                        text: text.clone(),
                         vars,
+                        start_line: 1,
+                        end_line: 1,
+                        start_col: 0,
+                        end_col: text.len(),
                     })
                 } else {
                     None
@@ -458,9 +720,14 @@ impl AstGrepService {
             .find_all(pattern)
             .map(|node| {
                 let vars: HashMap<String, String> = node.get_env().clone().into();
+                // TODO: Implement proper position extraction from node.range()
                 MatchResult {
                     text: node.text().to_string(),
                     vars,
+                    start_line: 1,
+                    end_line: 1,
+                    start_col: 0,
+                    end_col: node.text().len(),
                 }
             })
             .collect();
@@ -623,9 +890,14 @@ impl AstGrepService {
             .find_all(pattern)
             .map(|node| {
                 let vars: HashMap<String, String> = node.get_env().clone().into();
+                // TODO: Implement proper position extraction from node.range()
                 MatchResult {
                     text: node.text().to_string(),
                     vars,
+                    start_line: 1,
+                    end_line: 1,
+                    start_col: 0,
+                    end_col: node.text().len(),
                 }
             })
             .collect();
@@ -1968,10 +2240,14 @@ fix: "// TODO: Replace with proper logging: console.log($VAR)"
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MatchResult {
     pub text: String,
     pub vars: HashMap<String, String>,
+    pub start_line: usize,
+    pub end_line: usize,
+    pub start_col: usize,
+    pub end_col: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -2415,6 +2691,19 @@ pub struct DeleteRuleResult {
     pub file_path: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenerateAstParam {
+    pub code: String,
+    pub language: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GenerateAstResult {
+    pub ast: String,
+    pub language: String,
+    pub code_length: usize,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GetRuleParam {
     pub rule_id: String,
@@ -2647,6 +2936,18 @@ impl ServerHandler for AstGrepService {
                         "required": ["rule_url"]
                     })).unwrap()),
                 },
+                Tool {
+                    name: "generate_ast".into(),
+                    description: "Generate a stringified syntax tree for code using Tree-sitter. Useful for debugging patterns and understanding AST structure.".into(),
+                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "code": { "type": "string", "description": "Source code to parse" },
+                            "language": { "type": "string", "description": "Programming language of the code" }
+                        },
+                        "required": ["code", "language"]
+                    })).unwrap()),
+                },
                 ],
                 ..Default::default()
             })
@@ -2805,6 +3106,16 @@ impl ServerHandler for AstGrepService {
                 ))
                 .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
                 let result = self.import_catalog_rule(param).await.map_err(ErrorData::from)?;
+                let json_value = serde_json::to_value(&result)
+                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))?;
+                Ok(CallToolResult::success(vec![Content::json(json_value)?]))
+            }
+            "generate_ast" => {
+                let param: GenerateAstParam = serde_json::from_value(serde_json::Value::Object(
+                    request.arguments.unwrap_or_default(),
+                ))
+                .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
+                let result = self.generate_ast(param).await.map_err(ErrorData::from)?;
                 let json_value = serde_json::to_value(&result)
                     .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))?;
                 Ok(CallToolResult::success(vec![Content::json(json_value)?]))
@@ -3111,5 +3422,23 @@ mod tests {
         let (used, capacity) = service.get_cache_stats();
         assert_eq!(used, 2);
         assert_eq!(capacity, 2);
+    }
+
+    #[tokio::test]
+    async fn test_generate_ast() {
+        let service = AstGrepService::new();
+        let param = GenerateAstParam {
+            code: "function test() { return 42; }".into(),
+            language: "javascript".into(),
+        };
+
+        let result = service.generate_ast(param).await.unwrap();
+        
+        // Should contain function declaration
+        assert!(result.ast.contains("function_declaration"));
+        assert!(result.ast.contains("identifier"));
+        assert!(result.ast.contains("number"));
+        assert_eq!(result.language, "javascript");
+        assert_eq!(result.code_length, 29);
     }
 }
