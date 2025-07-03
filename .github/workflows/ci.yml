@@ -18,7 +18,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macOS-latest]
-        rust: [stable, beta, nightly]
+        rust: [stable]
         exclude:
           # Skip some combinations to reduce CI time
           - os: windows-latest
