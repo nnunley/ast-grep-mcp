@@ -327,3 +327,174 @@ fix: "console.debug($ARG)"
     assert!(get_result.rule_config.contains("Version 2"));
     assert!(get_result.rule_config.contains("fix:"));
 }
+
+#[tokio::test]
+async fn test_composite_rule_all() {
+    use ast_grep_mcp::ast_grep_service::{ServiceConfig, RuleSearchParam};
+    
+    let temp_dir = TempDir::new().unwrap();
+    
+    let config = ServiceConfig {
+        root_directories: vec![temp_dir.path().to_path_buf()],
+        ..Default::default()
+    };
+    let service = AstGrepService::with_config(config);
+    
+    // Create a test JavaScript file
+    let test_file = temp_dir.path().join("test.js");
+    fs::write(&test_file, "console.log('hello');\nfunction test() { console.error('error'); }").unwrap();
+
+    // Test "all" composite rule - should find nodes that match ALL patterns
+    let yaml_rule = r#"
+id: test-composite-all
+language: javascript
+message: "Found console method in function"
+severity: info
+rule:
+  all:
+    - pattern: "console.$METHOD($ARG)"
+    - regex: "error"
+"#;
+
+    let param = RuleSearchParam {
+        rule_config: yaml_rule.to_string(),
+        path_pattern: Some("**/*.js".to_string()),
+        max_results: None,
+        max_file_size: None,
+        cursor: None,
+    };
+
+    let result = service.rule_search(param).await.unwrap();
+    assert_eq!(result.rule_id, "test-composite-all");
+    // Should find matches that satisfy both conditions
+    assert!(!result.matches.is_empty());
+}
+
+#[tokio::test]
+async fn test_composite_rule_any() {
+    use ast_grep_mcp::ast_grep_service::{ServiceConfig, RuleSearchParam};
+    
+    let temp_dir = TempDir::new().unwrap();
+    
+    let config = ServiceConfig {
+        root_directories: vec![temp_dir.path().to_path_buf()],
+        ..Default::default()
+    };
+    let service = AstGrepService::with_config(config);
+    
+    // Create a test JavaScript file
+    let test_file = temp_dir.path().join("test.js");
+    fs::write(&test_file, "console.log('hello');\nconsole.error('error');\nconsole.warn('warning');").unwrap();
+
+    // Test "any" composite rule - should find nodes that match ANY pattern
+    let yaml_rule = r#"
+id: test-composite-any
+language: javascript
+message: "Found console usage"
+severity: info
+rule:
+  any:
+    - pattern: "console.log($ARG)"
+    - pattern: "console.error($ARG)"
+    - pattern: "console.warn($ARG)"
+"#;
+
+    let param = RuleSearchParam {
+        rule_config: yaml_rule.to_string(),
+        path_pattern: Some("**/*.js".to_string()),
+        max_results: None,
+        max_file_size: None,
+        cursor: None,
+    };
+
+    let result = service.rule_search(param).await.unwrap();
+    assert_eq!(result.rule_id, "test-composite-any");
+    // Should find all three console method calls
+    assert!(result.matches.len() > 0);
+    
+    // Check that we found multiple matches
+    let total_matches: usize = result.matches.iter().map(|m| m.matches.len()).sum();
+    assert_eq!(total_matches, 3); // Three console calls
+}
+
+#[tokio::test]
+async fn test_composite_rule_not() {
+    use ast_grep_mcp::ast_grep_service::{ServiceConfig, RuleSearchParam};
+    
+    let temp_dir = TempDir::new().unwrap();
+    
+    let config = ServiceConfig {
+        root_directories: vec![temp_dir.path().to_path_buf()],
+        ..Default::default()
+    };
+    let service = AstGrepService::with_config(config);
+    
+    // Create a test JavaScript file
+    let test_file = temp_dir.path().join("test.js");
+    fs::write(&test_file, "console.log('hello');\nfunction test() { return 42; }").unwrap();
+
+    // Test "not" composite rule - should find nodes that DON'T match the pattern
+    let yaml_rule = r#"
+id: test-composite-not
+language: javascript
+message: "Found non-console code"
+severity: info
+rule:
+  not:
+    pattern: "console.$METHOD($ARG)"
+"#;
+
+    let param = RuleSearchParam {
+        rule_config: yaml_rule.to_string(),
+        path_pattern: Some("**/*.js".to_string()),
+        max_results: None,
+        max_file_size: None,
+        cursor: None,
+    };
+
+    let result = service.rule_search(param).await.unwrap();
+    assert_eq!(result.rule_id, "test-composite-not");
+    // Should find matches that are NOT console calls
+    assert!(!result.matches.is_empty());
+}
+
+#[tokio::test]
+async fn test_rule_with_regex() {
+    use ast_grep_mcp::ast_grep_service::{ServiceConfig, RuleSearchParam};
+    
+    let temp_dir = TempDir::new().unwrap();
+    
+    let config = ServiceConfig {
+        root_directories: vec![temp_dir.path().to_path_buf()],
+        ..Default::default()
+    };
+    let service = AstGrepService::with_config(config);
+    
+    // Create a test JavaScript file
+    let test_file = temp_dir.path().join("test.js");
+    fs::write(&test_file, "const ERROR_CODE = 500;\nconst SUCCESS_CODE = 200;").unwrap();
+
+    // Test regex rule
+    let yaml_rule = r#"
+id: test-regex-rule
+language: javascript
+message: "Found error-related code"
+severity: warning
+rule:
+  regex: "ERROR"
+"#;
+
+    let param = RuleSearchParam {
+        rule_config: yaml_rule.to_string(),
+        path_pattern: Some("**/*.js".to_string()),
+        max_results: None,
+        max_file_size: None,
+        cursor: None,
+    };
+
+    let result = service.rule_search(param).await.unwrap();
+    assert_eq!(result.rule_id, "test-regex-rule");
+    // Should find the ERROR text
+    assert!(!result.matches.is_empty());
+    assert!(result.matches[0].matches.iter().any(|m| m.text.contains("ERROR")));
+}
