@@ -130,5 +130,8 @@ jobs:
     - name: Install minimal-versions
       run: cargo install cargo-minimal-versions
 
+    - name: Install cargo-hack
+      run: cargo install cargo-hack
+
     - name: Check minimal versions
       run: cargo minimal-versions check
