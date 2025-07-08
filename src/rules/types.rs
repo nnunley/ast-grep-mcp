@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::types::CursorParam;
+use serde::{Deserialize, Serialize};
 
 // Rule configuration types
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -143,7 +143,15 @@ pub struct DeleteRuleResult {
 }
 
 // Default functions for serde
-fn default_max_results() -> usize { 10000 }
-fn default_max_file_size() -> u64 { 50 * 1024 * 1024 }
-fn default_true() -> bool { true }
-fn default_false() -> bool { false }
+fn default_max_results() -> usize {
+    10000
+}
+fn default_max_file_size() -> u64 {
+    50 * 1024 * 1024
+}
+fn default_true() -> bool {
+    true
+}
+fn default_false() -> bool {
+    false
+}

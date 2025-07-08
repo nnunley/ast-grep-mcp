@@ -1,8 +1,8 @@
 use crate::config::ServiceConfig;
 use crate::errors::ServiceError;
 use crate::pattern::PatternMatcher;
+use crate::rules::{RuleEvaluator, RuleReplaceParam, parse_rule_config};
 use crate::types::*;
-use crate::rules::{parse_rule_config, RuleEvaluator, RuleReplaceParam};
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang as Language;
 use globset::{Glob, GlobSetBuilder};
@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 use std::str::FromStr;
 use walkdir::WalkDir;
 
+#[derive(Clone)]
 pub struct ReplaceService {
     config: ServiceConfig,
     pattern_matcher: PatternMatcher,
@@ -17,7 +18,11 @@ pub struct ReplaceService {
 }
 
 impl ReplaceService {
-    pub fn new(config: ServiceConfig, pattern_matcher: PatternMatcher, rule_evaluator: RuleEvaluator) -> Self {
+    pub fn new(
+        config: ServiceConfig,
+        pattern_matcher: PatternMatcher,
+        rule_evaluator: RuleEvaluator,
+    ) -> Self {
         Self {
             config,
             pattern_matcher,
@@ -30,10 +35,14 @@ impl ReplaceService {
             .map_err(|_| ServiceError::Internal("Failed to parse language".to_string()))?;
 
         // First, find all matches to track changes
-        let matches = self.pattern_matcher.search(&param.code, &param.pattern, lang)?;
-        
+        let matches = self
+            .pattern_matcher
+            .search(&param.code, &param.pattern, lang)?;
+
         // Apply the replacement
-        let new_code = self.pattern_matcher.replace(&param.code, &param.pattern, &param.replacement, lang)?;
+        let new_code =
+            self.pattern_matcher
+                .replace(&param.code, &param.pattern, &param.replacement, lang)?;
 
         // Convert matches to change results
         let changes: Vec<ChangeResult> = matches
@@ -51,7 +60,10 @@ impl ReplaceService {
         Ok(ReplaceResult { new_code, changes })
     }
 
-    pub async fn file_replace(&self, param: FileReplaceParam) -> Result<FileReplaceResult, ServiceError> {
+    pub async fn file_replace(
+        &self,
+        param: FileReplaceParam,
+    ) -> Result<FileReplaceResult, ServiceError> {
         let lang = Language::from_str(&param.language)
             .map_err(|_| ServiceError::Internal("Failed to parse language".to_string()))?;
 
@@ -83,7 +95,7 @@ impl ReplaceService {
 
                 // Skip until we reach the cursor position
                 if let Some(ref start_path) = start_after {
-                    if path_str.as_ref() <= start_path {
+                    if path_str.as_ref() <= start_path.as_str() {
                         continue;
                     }
                 }
@@ -101,11 +113,18 @@ impl ReplaceService {
                     // Read and process file
                     if let Ok(content) = std::fs::read_to_string(path) {
                         // Find matches first
-                        let matches = self.pattern_matcher.search(&content, &param.pattern, lang)?;
+                        let matches =
+                            self.pattern_matcher
+                                .search(&content, &param.pattern, lang)?;
 
                         if !matches.is_empty() {
                             // Apply replacements
-                            let new_content = self.pattern_matcher.replace(&content, &param.pattern, &param.replacement, lang)?;
+                            let new_content = self.pattern_matcher.replace(
+                                &content,
+                                &param.pattern,
+                                &param.replacement,
+                                lang,
+                            )?;
                             let file_hash = format!("{:x}", Sha256::digest(content.as_bytes()));
 
                             // Convert matches to changes
@@ -123,7 +142,7 @@ impl ReplaceService {
 
                             let change_count = changes.len();
                             total_changes += change_count;
-                            
+
                             if change_count > 0 {
                                 files_with_changes += 1;
                             }
@@ -147,10 +166,14 @@ impl ReplaceService {
                                     last_file_path: path_str.to_string(),
                                     is_complete: false,
                                 });
-                                
+
                                 return self.build_file_replace_result(
-                                    param, file_results, next_cursor, total_files_found, 
-                                    total_changes, files_with_changes
+                                    param,
+                                    file_results,
+                                    next_cursor,
+                                    total_files_found,
+                                    total_changes,
+                                    files_with_changes,
                                 );
                             }
                         }
@@ -165,25 +188,34 @@ impl ReplaceService {
         });
 
         self.build_file_replace_result(
-            param, file_results, next_cursor, total_files_found, 
-            total_changes, files_with_changes
+            param,
+            file_results,
+            next_cursor,
+            total_files_found,
+            total_changes,
+            files_with_changes,
         )
     }
 
-    pub async fn rule_replace(&self, param: RuleReplaceParam) -> Result<FileReplaceResult, ServiceError> {
+    pub async fn rule_replace(
+        &self,
+        param: RuleReplaceParam,
+    ) -> Result<FileReplaceResult, ServiceError> {
         let rule = parse_rule_config(&param.rule_config)?;
-        
+
         if rule.fix.is_none() {
-            return Err(ServiceError::ParserError("Rule must have a 'fix' field for replacement".to_string()));
+            return Err(ServiceError::ParserError(
+                "Rule must have a 'fix' field for replacement".to_string(),
+            ));
         }
-        
+
         let fix_template = rule.fix.unwrap();
         let lang = Language::from_str(&rule.language)
             .map_err(|_| ServiceError::Internal("Failed to parse language".to_string()))?;
 
         // Use path pattern or default to all files
         let path_pattern = param.path_pattern.unwrap_or_else(|| "**/*".to_string());
-        
+
         let glob = Glob::new(&path_pattern)
             .map_err(|e| ServiceError::Internal(format!("Invalid glob pattern: {}", e)))?;
         let mut glob_builder = GlobSetBuilder::new();
@@ -212,7 +244,7 @@ impl ReplaceService {
 
                 // Skip until we reach the cursor position
                 if let Some(ref start_path) = start_after {
-                    if path_str.as_ref() <= start_path {
+                    if path_str.as_ref() <= start_path.as_str() {
                         continue;
                     }
                 }
@@ -230,11 +262,13 @@ impl ReplaceService {
                     // Read and process file
                     if let Ok(content) = std::fs::read_to_string(path) {
                         // Apply rule-based replacement
-                        let ast = AstGrep::new(&content, lang);
-                        
+                        let _ast = AstGrep::new(&content, lang);
+
                         // For rule-based replacement, we would need to implement proper pattern matching
                         // and template substitution. For now, this is a simplified version.
-                        let matches = self.rule_evaluator.evaluate_rule_against_code(&rule.rule, &content, lang)?;
+                        let matches = self
+                            .rule_evaluator
+                            .evaluate_rule_against_code(&rule.rule, &content, lang)?;
 
                         if !matches.is_empty() {
                             let file_hash = format!("{:x}", Sha256::digest(content.as_bytes()));
@@ -254,7 +288,7 @@ impl ReplaceService {
 
                             let change_count = changes.len();
                             total_changes += change_count;
-                            
+
                             if change_count > 0 {
                                 files_with_changes += 1;
                             }
@@ -273,7 +307,7 @@ impl ReplaceService {
                                     last_file_path: path_str.to_string(),
                                     is_complete: false,
                                 });
-                                
+
                                 return Ok(FileReplaceResult {
                                     file_results,
                                     summary_results: vec![],
@@ -319,11 +353,15 @@ impl ReplaceService {
                 .into_iter()
                 .map(|diff_result| {
                     let sample_changes = if param.include_samples {
-                        diff_result.changes.into_iter().take(param.max_samples).collect()
+                        diff_result
+                            .changes
+                            .into_iter()
+                            .take(param.max_samples)
+                            .collect()
                     } else {
                         vec![]
                     };
-                    
+
                     FileSummaryResult {
                         file_path: diff_result.file_path,
                         file_size_bytes: diff_result.file_size_bytes,

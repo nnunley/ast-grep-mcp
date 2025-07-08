@@ -10,11 +10,17 @@ pub struct PatternMatcher {
     pattern_cache: Arc<Mutex<HashMap<String, Pattern>>>,
 }
 
-impl PatternMatcher {
-    pub fn new() -> Self {
+impl Default for PatternMatcher {
+    fn default() -> Self {
         Self {
             pattern_cache: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+}
+
+impl PatternMatcher {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn with_cache(cache: Arc<Mutex<HashMap<String, Pattern>>>) -> Self {
@@ -27,45 +33,58 @@ impl PatternMatcher {
         self.pattern_cache.clone()
     }
 
-    pub fn search(&self, code: &str, pattern: &str, lang: Language) -> Result<Vec<MatchResult>, ServiceError> {
+    pub fn search(
+        &self,
+        code: &str,
+        pattern: &str,
+        lang: Language,
+    ) -> Result<Vec<MatchResult>, ServiceError> {
         let ast = AstGrep::new(code, lang);
         let pattern = self.get_or_create_pattern(pattern, lang)?;
 
         let matches: Vec<MatchResult> = ast
             .root()
             .find_all(pattern)
-            .map(|node| {
-                let vars: HashMap<String, String> = node.get_env().clone().into();
-                let range = node.range();
-                let start_pos = range.start;
-                let end_pos = range.end;
-
-                MatchResult {
-                    text: node.text().to_string(),
-                    start_line: start_pos.row + 1,
-                    end_line: end_pos.row + 1,
-                    start_col: start_pos.column,
-                    end_col: end_pos.column,
-                    vars,
-                }
-            })
+            .map(|node| MatchResult::from_node_match(&node))
             .collect();
 
         Ok(matches)
     }
 
-    pub fn replace(&self, code: &str, pattern: &str, replacement: &str, lang: Language) -> Result<String, ServiceError> {
+    pub fn replace(
+        &self,
+        code: &str,
+        pattern: &str,
+        replacement: &str,
+        lang: Language,
+    ) -> Result<String, ServiceError> {
         let ast = AstGrep::new(code, lang);
         let pattern = self.get_or_create_pattern(pattern, lang)?;
 
         // Apply replacements
-        let result = ast.root().replace_all(pattern, replacement);
+        let edits = ast.root().replace_all(pattern, replacement);
+        let mut result = code.to_string();
+
+        // Apply edits in reverse order to maintain correct offsets
+        for edit in edits.into_iter().rev() {
+            let start = edit.position;
+            let end = start + edit.deleted_length;
+            result.replace_range(
+                start..end,
+                std::str::from_utf8(&edit.inserted_text).unwrap(),
+            );
+        }
+
         Ok(result)
     }
 
-    fn get_or_create_pattern(&self, pattern_str: &str, lang: Language) -> Result<Pattern, ServiceError> {
-        let cache_key = format!("{}:{}", lang.to_string(), pattern_str);
-        
+    fn get_or_create_pattern(
+        &self,
+        pattern_str: &str,
+        lang: Language,
+    ) -> Result<Pattern, ServiceError> {
+        let cache_key = format!("{}:{}", lang, pattern_str);
+
         // Try to get from cache first
         {
             let cache = self.pattern_cache.lock().unwrap();
@@ -75,8 +94,7 @@ impl PatternMatcher {
         }
 
         // Create new pattern
-        let pattern = Pattern::new(pattern_str, lang)
-            .map_err(|_| ServiceError::ParserError("Failed to parse pattern".to_string()))?;
+        let pattern = Pattern::new(pattern_str, lang);
 
         // Store in cache
         {

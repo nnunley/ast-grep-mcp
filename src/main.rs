@@ -2,8 +2,7 @@ use anyhow::Result;
 use rmcp::{ServiceExt, transport::stdio};
 use tracing_subscriber::{self, filter::EnvFilter};
 
-mod ast_grep_service;
-use ast_grep_service::AstGrepService;
+use ast_grep_mcp::ast_grep_service::AstGrepService;
 
 #[tokio::main]
 #[tracing::instrument]

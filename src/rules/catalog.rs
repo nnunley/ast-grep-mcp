@@ -1,19 +1,23 @@
-use crate::errors::ServiceError;
-use crate::types::{ListCatalogRulesParam, ListCatalogRulesResult, CatalogRuleInfo, ImportCatalogRuleParam, ImportCatalogRuleResult};
-use super::types::CreateRuleParam;
 use super::storage::RuleStorage;
+use super::types::CreateRuleParam;
+use crate::errors::ServiceError;
+use crate::types::{
+    CatalogRuleInfo, ImportCatalogRuleParam, ImportCatalogRuleResult, ListCatalogRulesParam,
+    ListCatalogRulesResult,
+};
 
-#[derive(Clone)]
-pub struct CatalogManager {
-    storage: RuleStorage,
-}
+#[derive(Clone, Default)]
+pub struct CatalogManager {}
 
 impl CatalogManager {
-    pub fn new(storage: RuleStorage) -> Self {
-        Self { storage }
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    pub async fn list_catalog_rules(&self, param: ListCatalogRulesParam) -> Result<ListCatalogRulesResult, ServiceError> {
+    pub async fn list_catalog_rules(
+        &self,
+        param: ListCatalogRulesParam,
+    ) -> Result<ListCatalogRulesResult, ServiceError> {
         // For now, return a static list of example rules from the ast-grep catalog
         // In a real implementation, this would fetch from https://ast-grep.github.io/catalog/
         let mut rules = vec![
@@ -39,7 +43,8 @@ impl CatalogManager {
                 description: "Replace == with === for strict equality".to_string(),
                 language: "javascript".to_string(),
                 category: "best-practices".to_string(),
-                url: "https://ast-grep.github.io/catalog/javascript/use-strict-equality".to_string(),
+                url: "https://ast-grep.github.io/catalog/javascript/use-strict-equality"
+                    .to_string(),
             },
             CatalogRuleInfo {
                 id: "no-var-declarations".to_string(),
@@ -47,7 +52,8 @@ impl CatalogManager {
                 description: "Replace var with let or const".to_string(),
                 language: "javascript".to_string(),
                 category: "modernization".to_string(),
-                url: "https://ast-grep.github.io/catalog/javascript/no-var-declarations".to_string(),
+                url: "https://ast-grep.github.io/catalog/javascript/no-var-declarations"
+                    .to_string(),
             },
             CatalogRuleInfo {
                 id: "use-template-literals".to_string(),
@@ -55,7 +61,8 @@ impl CatalogManager {
                 description: "Replace string concatenation with template literals".to_string(),
                 language: "javascript".to_string(),
                 category: "modernization".to_string(),
-                url: "https://ast-grep.github.io/catalog/javascript/use-template-literals".to_string(),
+                url: "https://ast-grep.github.io/catalog/javascript/use-template-literals"
+                    .to_string(),
             },
         ];
 
@@ -72,19 +79,24 @@ impl CatalogManager {
         Ok(ListCatalogRulesResult { rules })
     }
 
-    pub async fn import_catalog_rule(&self, param: ImportCatalogRuleParam) -> Result<ImportCatalogRuleResult, ServiceError> {
+    pub async fn import_catalog_rule(
+        &self,
+        param: ImportCatalogRuleParam,
+        storage: &RuleStorage,
+    ) -> Result<ImportCatalogRuleResult, ServiceError> {
         // For now, this is a mock implementation
         // In a real implementation, this would:
         // 1. Fetch the rule content from the provided URL
         // 2. Parse the YAML/JSON rule configuration
         // 3. Store it using the create_rule method
-        
+
         // Extract rule ID from URL or use provided one
         let rule_id = param.rule_id.unwrap_or_else(|| {
             // Extract ID from URL (last segment)
-            param.rule_url
+            param
+                .rule_url
                 .split('/')
-                .last()
+                .next_back()
                 .unwrap_or("imported-rule")
                 .to_string()
         });
@@ -99,7 +111,7 @@ impl CatalogManager {
             overwrite: false,
         };
 
-        match self.storage.create_rule(create_param).await {
+        match storage.create_rule(create_param).await {
             Ok(_) => Ok(ImportCatalogRuleResult {
                 rule_id: rule_id.clone(),
                 imported: true,

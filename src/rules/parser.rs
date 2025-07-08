@@ -1,5 +1,5 @@
+use super::types::{RuleConfig, RuleTestResult, RuleValidateParam, RuleValidateResult};
 use crate::errors::ServiceError;
-use super::types::{RuleConfig, RuleValidateParam, RuleValidateResult, RuleTestResult};
 // Removed unused import
 use ast_grep_language::SupportLang as Language;
 use std::str::FromStr;
@@ -33,13 +33,19 @@ pub fn validate_rule_config(content: &str) -> Result<Vec<String>, ServiceError> 
 
             // Validate rule structure
             if !has_valid_rule_condition(&rule.rule) {
-                errors.push("Rule must have at least one valid condition (pattern, kind, regex, etc.)".to_string());
+                errors.push(
+                    "Rule must have at least one valid condition (pattern, kind, regex, etc.)"
+                        .to_string(),
+                );
             }
 
             // Validate severity if present
             if let Some(ref severity) = rule.severity {
                 if !matches!(severity.as_str(), "error" | "warning" | "info") {
-                    errors.push(format!("Invalid severity '{}'. Must be 'error', 'warning', or 'info'", severity));
+                    errors.push(format!(
+                        "Invalid severity '{}'. Must be 'error', 'warning', or 'info'",
+                        severity
+                    ));
                 }
             }
         }
@@ -59,10 +65,10 @@ pub async fn validate_rule(param: RuleValidateParam) -> Result<RuleValidateResul
         // If rule is valid and test code is provided, test it
         match parse_rule_config(&param.rule_config) {
             Ok(rule) => {
-                let test_code = param.test_code.unwrap();
-                let lang = Language::from_str(&rule.language)
+                let _test_code = param.test_code.unwrap();
+                let _lang = Language::from_str(&rule.language)
                     .map_err(|_| ServiceError::ParserError("Invalid language".to_string()))?;
-                
+
                 // This would need the evaluation engine to work properly
                 // For now, return a mock result
                 Some(RuleTestResult {
@@ -84,15 +90,15 @@ pub async fn validate_rule(param: RuleValidateParam) -> Result<RuleValidateResul
 }
 
 fn has_valid_rule_condition(rule: &super::types::RuleObject) -> bool {
-    rule.pattern.is_some() ||
-        rule.kind.is_some() ||
-        rule.regex.is_some() ||
-        rule.inside.is_some() ||
-        rule.has.is_some() ||
-        rule.follows.is_some() ||
-        rule.precedes.is_some() ||
-        rule.all.as_ref().is_some_and(|v| !v.is_empty()) ||
-        rule.any.as_ref().is_some_and(|v| !v.is_empty()) ||
-        rule.not.is_some() ||
-        rule.matches.is_some()
+    rule.pattern.is_some()
+        || rule.kind.is_some()
+        || rule.regex.is_some()
+        || rule.inside.is_some()
+        || rule.has.is_some()
+        || rule.follows.is_some()
+        || rule.precedes.is_some()
+        || rule.all.as_ref().is_some_and(|v| !v.is_empty())
+        || rule.any.as_ref().is_some_and(|v| !v.is_empty())
+        || rule.not.is_some()
+        || rule.matches.is_some()
 }

@@ -129,11 +129,8 @@ jobs:
     - name: Install Rust
       uses: dtolnay/rust-toolchain@nightly
 
-    - name: Install minimal-versions
-      run: cargo install cargo-minimal-versions
-
     - name: Install cargo-hack
       run: cargo install cargo-hack
 
     - name: Check minimal versions
-      run: cargo minimal-versions check
+      run: cargo hack check --each-feature --no-dev-deps

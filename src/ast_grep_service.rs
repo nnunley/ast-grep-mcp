@@ -1,8 +1,14 @@
+use crate::config::ServiceConfig;
+use crate::errors::ServiceError;
+use crate::pattern::PatternMatcher;
+use crate::replace::ReplaceService;
+use crate::rules::{CatalogManager, RuleEvaluator, RuleService, RuleStorage};
+use crate::search::SearchService;
+
 use lru::LruCache;
 use std::num::NonZeroUsize;
 use std::{
-    borrow::Cow, collections::HashMap, fmt, fs, io, path::PathBuf, str::FromStr, sync::Arc,
-    sync::Mutex,
+    borrow::Cow, collections::HashMap, fs, path::PathBuf, str::FromStr, sync::Arc, sync::Mutex,
 };
 
 use ast_grep_core::{AstGrep, Pattern, Position, tree_sitter::StrDoc};
@@ -22,99 +28,18 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
-#[derive(Debug, Clone)]
-pub struct ServiceConfig {
-    /// Maximum file size to process (in bytes)
-    pub max_file_size: u64,
-    /// Maximum number of concurrent file operations
-    pub max_concurrency: usize,
-    /// Maximum number of results to return per search
-    pub limit: usize,
-    /// Root directories for file search (defaults to current working directory)
-    pub root_directories: Vec<PathBuf>,
-    /// Directory for storing custom rules created by LLMs
-    pub rules_directory: PathBuf,
-    /// Maximum number of compiled patterns to cache (default: 1000)
-    pub pattern_cache_size: usize,
-}
-
-impl Default for ServiceConfig {
-    fn default() -> Self {
-        Self {
-            max_file_size: 50 * 1024 * 1024, // 50MB
-            max_concurrency: 10,
-            limit: 100,
-            root_directories: vec![std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))],
-            rules_directory: PathBuf::from(".ast-grep-rules"),
-            pattern_cache_size: 1000, // Cache up to 1000 compiled patterns
-        }
-    }
-}
-
 #[derive(Clone)]
 pub struct AstGrepService {
     config: ServiceConfig,
     pattern_cache: Arc<Mutex<LruCache<String, Pattern>>>,
-}
-
-#[derive(Debug)]
-pub enum ServiceError {
-    Io(io::Error),
-    SerdeJson(serde_json::Error),
-    Glob(globset::Error),
-    ParserError(String),
-    ToolNotFound(String),
-    Internal(String),
-}
-
-impl fmt::Display for ServiceError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ServiceError::Io(e) => write!(f, "IO error: {}", e),
-            ServiceError::SerdeJson(e) => write!(f, "JSON error: {}", e),
-            ServiceError::ParserError(e) => write!(f, "Parser error: {}", e),
-            ServiceError::Glob(e) => write!(f, "Glob error: {}", e),
-            ServiceError::ToolNotFound(tool) => write!(f, "Tool not found: {}", tool),
-            ServiceError::Internal(msg) => write!(f, "Internal service error: {}", msg),
-        }
-    }
-}
-
-impl From<io::Error> for ServiceError {
-    fn from(err: io::Error) -> Self {
-        ServiceError::Io(err)
-    }
-}
-
-impl From<globset::Error> for ServiceError {
-    fn from(err: globset::Error) -> Self {
-        ServiceError::Glob(err)
-    }
-}
-
-impl From<serde_json::Error> for ServiceError {
-    fn from(err: serde_json::Error) -> Self {
-        ServiceError::SerdeJson(err)
-    }
-}
-
-impl std::error::Error for ServiceError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            ServiceError::Io(e) => Some(e),
-            ServiceError::SerdeJson(e) => Some(e),
-            ServiceError::Glob(e) => Some(e),
-            ServiceError::ParserError(_) => None,
-            ServiceError::ToolNotFound(_) => None,
-            ServiceError::Internal(_) => None,
-        }
-    }
-}
-
-impl From<ServiceError> for ErrorData {
-    fn from(err: ServiceError) -> Self {
-        ErrorData::internal_error(Cow::Owned(err.to_string()), None)
-    }
+    #[allow(dead_code)]
+    pattern_matcher: PatternMatcher,
+    #[allow(dead_code)]
+    search_service: SearchService,
+    #[allow(dead_code)]
+    replace_service: ReplaceService,
+    #[allow(dead_code)]
+    rule_service: RuleService,
 }
 
 impl Default for AstGrepService {
@@ -133,9 +58,35 @@ impl AstGrepService {
         let config = ServiceConfig::default();
         let cache_size = NonZeroUsize::new(config.pattern_cache_size)
             .unwrap_or(NonZeroUsize::new(1000).unwrap());
+        let pattern_cache = Arc::new(Mutex::new(LruCache::new(cache_size)));
+        let pattern_matcher = PatternMatcher::new();
+        let rule_evaluator = RuleEvaluator::new();
+        let search_service = SearchService::new(
+            config.clone(),
+            pattern_matcher.clone(),
+            rule_evaluator.clone(),
+        );
+        let replace_service = ReplaceService::new(
+            config.clone(),
+            pattern_matcher.clone(),
+            rule_evaluator.clone(),
+        );
+        let rule_storage = RuleStorage::new(config.rules_directory.clone());
+        let catalog_manager = CatalogManager::new();
+        let rule_service = RuleService::new(
+            config.clone(),
+            rule_evaluator.clone(),
+            rule_storage,
+            catalog_manager,
+        );
+
         Self {
             config,
-            pattern_cache: Arc::new(Mutex::new(LruCache::new(cache_size))),
+            pattern_cache,
+            pattern_matcher,
+            search_service,
+            replace_service,
+            rule_service,
         }
     }
 
@@ -143,9 +94,35 @@ impl AstGrepService {
     pub fn with_config(config: ServiceConfig) -> Self {
         let cache_size = NonZeroUsize::new(config.pattern_cache_size)
             .unwrap_or(NonZeroUsize::new(1000).unwrap());
+        let pattern_cache = Arc::new(Mutex::new(LruCache::new(cache_size)));
+        let pattern_matcher = PatternMatcher::new();
+        let rule_evaluator = RuleEvaluator::new();
+        let search_service = SearchService::new(
+            config.clone(),
+            pattern_matcher.clone(),
+            rule_evaluator.clone(),
+        );
+        let replace_service = ReplaceService::new(
+            config.clone(),
+            pattern_matcher.clone(),
+            rule_evaluator.clone(),
+        );
+        let rule_storage = RuleStorage::new(config.rules_directory.clone());
+        let catalog_manager = CatalogManager::new();
+        let rule_service = RuleService::new(
+            config.clone(),
+            rule_evaluator.clone(),
+            rule_storage,
+            catalog_manager,
+        );
+
         Self {
             config,
-            pattern_cache: Arc::new(Mutex::new(LruCache::new(cache_size))),
+            pattern_cache,
+            pattern_matcher,
+            search_service,
+            replace_service,
+            rule_service,
         }
     }
 
@@ -200,7 +177,7 @@ impl AstGrepService {
         let ast = AstGrep::new(&param.code, lang);
 
         // Build a string representation of the AST
-        let ast_string = self.build_ast_string(ast.root(), 0);
+        let ast_string = Self::build_ast_string(ast.root(), 0);
 
         Ok(GenerateAstResult {
             ast: ast_string,
@@ -211,7 +188,6 @@ impl AstGrepService {
 
     /// Recursively build a string representation of the AST
     fn build_ast_string<D: ast_grep_core::Doc>(
-        &self,
         node: ast_grep_core::Node<D>,
         depth: usize,
     ) -> String {
@@ -237,7 +213,7 @@ impl AstGrepService {
 
         // Recursively add children
         for child in node.children() {
-            result.push_str(&self.build_ast_string(child, depth + 1));
+            result.push_str(&Self::build_ast_string(child, depth + 1));
         }
 
         result
@@ -1551,7 +1527,7 @@ Returns: `{"files_with_changes": [["src/main.rs", 15], ["src/lib.rs", 8]], "tota
 3. **Apply changes:**
 ```json
 {
-  "path_pattern": "src/**/*.rs", 
+  "path_pattern": "src/**/*.rs",
   "pattern": "\"$STRING\".to_string()",
   "replacement": "\"$STRING\".into()",
   "language": "rust",
@@ -1574,7 +1550,7 @@ Returns: `{"files_with_changes": [["src/main.rs", 15], ["src/lib.rs", 8]], "tota
       },
       {
         "line": 23,
-        "old_text": "const result = calculate();", 
+        "old_text": "const result = calculate();",
         "new_text": "let result = calculate();"
       }
     ],
@@ -1598,7 +1574,7 @@ Returns: `{"files_with_changes": [["src/main.rs", 15], ["src/lib.rs", 8]], "tota
 
 // Then apply the changes
 {
-  "path_pattern": "src/**/*.ts", 
+  "path_pattern": "src/**/*.ts",
   "pattern": "fetch($URL).then($HANDLER)",
   "replacement": "await fetch($URL).then($HANDLER)",
   "language": "typescript",
@@ -1667,7 +1643,7 @@ Returns all supported programming languages.
 
 **Supported Languages Include:**
 - **Web:** javascript, typescript, tsx, html, css
-- **Systems:** rust, c, cpp, go 
+- **Systems:** rust, c, cpp, go
 - **Enterprise:** java, csharp, kotlin, scala
 - **Scripting:** python, ruby, lua, bash
 - **Others:** swift, dart, elixir, haskell, php, yaml, json
@@ -1716,7 +1692,7 @@ fix: "console.debug($ARG)"  # For rule_replace only
 {
   "id": "unique-rule-id",
   "language": "javascript",
-  "message": "Optional message for matches", 
+  "message": "Optional message for matches",
   "severity": "warning",
   "rule": {
     "pattern": "console.log($ARG)"
