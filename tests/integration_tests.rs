@@ -1,8 +1,8 @@
 use std::fs;
 
 use ast_grep_mcp::ast_grep_service::AstGrepService;
-use ast_grep_mcp::{FileReplaceParam, FileSearchParam};
 use ast_grep_mcp::config::ServiceConfig;
+use ast_grep_mcp::{FileReplaceParam, FileSearchParam};
 use tempfile::TempDir;
 
 #[tokio::test]

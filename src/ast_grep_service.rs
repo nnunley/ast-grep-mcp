@@ -2907,10 +2907,7 @@ mod tests {
             language: "javascript".into(),
         };
         let result = service.replace(param).await.unwrap();
-        assert_eq!(
-            result.new_code,
-            "const a = 1; const b = 2; const c = 3;"
-        );
+        assert_eq!(result.new_code, "const a = 1; const b = 2; const c = 3;");
     }
 
     #[tokio::test]
