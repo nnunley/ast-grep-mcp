@@ -111,7 +111,7 @@ pub struct ReplaceResult {
     pub changes: Vec<ChangeResult>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChangeResult {
     pub start_line: usize,
     pub end_line: usize,
@@ -280,4 +280,243 @@ fn default_false() -> bool {
 }
 fn default_max_samples() -> usize {
     3
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ast_grep_core::{AstGrep, Pattern};
+    use ast_grep_language::SupportLang as Language;
+
+    #[test]
+    fn test_match_result_from_node_match() {
+        let code = "console.log('test');";
+        let lang = Language::JavaScript;
+        let ast = AstGrep::new(code, lang);
+        let pattern = Pattern::new("console.log($VAR)", lang);
+
+        if let Some(node_match) = ast.root().find(pattern) {
+            let match_result = MatchResult::from_node_match(&node_match);
+
+            assert!(match_result.text.contains("console.log"));
+            assert_eq!(match_result.start_line, 0); // ast-grep uses 0-based line indexing
+            assert_eq!(match_result.start_col, 0);
+            // Variables should contain VAR
+            assert!(match_result.vars.contains_key("VAR"));
+        } else {
+            panic!("Pattern should match");
+        }
+    }
+
+    #[test]
+    fn test_file_search_param_default() {
+        let param = FileSearchParam {
+            path_pattern: "**/*.js".to_string(),
+            pattern: "console.log($VAR)".to_string(),
+            language: "javascript".to_string(),
+            ..Default::default()
+        };
+
+        assert_eq!(param.max_results, 100);
+        assert_eq!(param.max_file_size, 50 * 1024 * 1024);
+        assert!(param.cursor.is_none());
+    }
+
+    #[test]
+    fn test_file_replace_param_default() {
+        let param = FileReplaceParam {
+            path_pattern: "**/*.js".to_string(),
+            pattern: "var $VAR = $VALUE;".to_string(),
+            replacement: "let $VAR = $VALUE;".to_string(),
+            language: "javascript".to_string(),
+            ..Default::default()
+        };
+
+        assert_eq!(param.max_results, 10000);
+        assert_eq!(param.max_file_size, 50 * 1024 * 1024);
+        assert!(param.dry_run); // Should default to true
+        assert!(!param.summary_only); // Should default to false
+        assert!(!param.include_samples); // Should default to false
+        assert_eq!(param.max_samples, 3);
+        assert!(param.cursor.is_none());
+    }
+
+    #[test]
+    fn test_search_param_serialization() {
+        let param = SearchParam {
+            code: "console.log('test');".to_string(),
+            pattern: "console.log($VAR)".to_string(),
+            language: "javascript".to_string(),
+        };
+
+        let serialized = serde_json::to_string(&param).unwrap();
+        let deserialized: SearchParam = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(param.code, deserialized.code);
+        assert_eq!(param.pattern, deserialized.pattern);
+        assert_eq!(param.language, deserialized.language);
+    }
+
+    #[test]
+    fn test_replace_param_serialization() {
+        let param = ReplaceParam {
+            code: "var x = 1;".to_string(),
+            pattern: "var $VAR = $VALUE;".to_string(),
+            replacement: "let $VAR = $VALUE;".to_string(),
+            language: "javascript".to_string(),
+        };
+
+        let serialized = serde_json::to_string(&param).unwrap();
+        let deserialized: ReplaceParam = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(param.code, deserialized.code);
+        assert_eq!(param.pattern, deserialized.pattern);
+        assert_eq!(param.replacement, deserialized.replacement);
+        assert_eq!(param.language, deserialized.language);
+    }
+
+    #[test]
+    fn test_cursor_param_serialization() {
+        let cursor = CursorParam {
+            last_file_path: "test/file.js".to_string(),
+            is_complete: false,
+        };
+
+        let serialized = serde_json::to_string(&cursor).unwrap();
+        let deserialized: CursorParam = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(cursor.last_file_path, deserialized.last_file_path);
+        assert_eq!(cursor.is_complete, deserialized.is_complete);
+    }
+
+    #[test]
+    fn test_change_result_creation() {
+        let change = ChangeResult {
+            start_line: 1,
+            end_line: 1,
+            start_col: 0,
+            end_col: 10,
+            old_text: "var x = 1;".to_string(),
+            new_text: "let x = 1;".to_string(),
+        };
+
+        assert_eq!(change.start_line, 1);
+        assert_eq!(change.old_text, "var x = 1;");
+        assert_eq!(change.new_text, "let x = 1;");
+    }
+
+    #[test]
+    fn test_file_diff_result_creation() {
+        let changes = vec![
+            ChangeResult {
+                start_line: 1,
+                end_line: 1,
+                start_col: 0,
+                end_col: 10,
+                old_text: "var x = 1;".to_string(),
+                new_text: "let x = 1;".to_string(),
+            },
+            ChangeResult {
+                start_line: 2,
+                end_line: 2,
+                start_col: 0,
+                end_col: 10,
+                old_text: "var y = 2;".to_string(),
+                new_text: "let y = 2;".to_string(),
+            },
+        ];
+
+        let diff_result = FileDiffResult {
+            file_path: "test.js".to_string(),
+            file_size_bytes: 1024,
+            changes: changes.clone(),
+            total_changes: changes.len(),
+            file_hash: "abc123".to_string(),
+        };
+
+        assert_eq!(diff_result.file_path, "test.js");
+        assert_eq!(diff_result.total_changes, 2);
+        assert_eq!(diff_result.changes.len(), 2);
+    }
+
+    #[test]
+    fn test_file_summary_result_creation() {
+        let sample_changes = vec![ChangeResult {
+            start_line: 1,
+            end_line: 1,
+            start_col: 0,
+            end_col: 10,
+            old_text: "var x = 1;".to_string(),
+            new_text: "let x = 1;".to_string(),
+        }];
+
+        let summary_result = FileSummaryResult {
+            file_path: "test.js".to_string(),
+            file_size_bytes: 1024,
+            total_changes: 5,
+            lines_changed: 3,
+            file_hash: "abc123".to_string(),
+            sample_changes,
+        };
+
+        assert_eq!(summary_result.file_path, "test.js");
+        assert_eq!(summary_result.total_changes, 5);
+        assert_eq!(summary_result.lines_changed, 3);
+        assert_eq!(summary_result.sample_changes.len(), 1);
+    }
+
+    #[test]
+    fn test_generate_ast_param_serialization() {
+        let param = GenerateAstParam {
+            code: "function test() {}".to_string(),
+            language: "javascript".to_string(),
+        };
+
+        let serialized = serde_json::to_string(&param).unwrap();
+        let deserialized: GenerateAstParam = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(param.code, deserialized.code);
+        assert_eq!(param.language, deserialized.language);
+    }
+
+    #[test]
+    fn test_list_catalog_rules_param_optional_fields() {
+        let param1 = ListCatalogRulesParam {
+            language: Some("javascript".to_string()),
+            category: None,
+        };
+
+        let param2 = ListCatalogRulesParam {
+            language: None,
+            category: Some("best-practices".to_string()),
+        };
+
+        assert!(param1.language.is_some());
+        assert!(param1.category.is_none());
+        assert!(param2.language.is_none());
+        assert!(param2.category.is_some());
+    }
+
+    #[test]
+    fn test_import_catalog_rule_result() {
+        let result = ImportCatalogRuleResult {
+            rule_id: "test-rule".to_string(),
+            imported: true,
+            message: "Successfully imported".to_string(),
+        };
+
+        assert_eq!(result.rule_id, "test-rule");
+        assert!(result.imported);
+        assert!(result.message.contains("Successfully"));
+    }
+
+    #[test]
+    fn test_default_functions() {
+        assert_eq!(default_max_results(), 100);
+        assert_eq!(default_max_results_large(), 10000);
+        assert_eq!(default_max_file_size(), 50 * 1024 * 1024);
+        assert!(default_true());
+        assert!(!default_false());
+        assert_eq!(default_max_samples(), 3);
+    }
 }

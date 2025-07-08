@@ -1,0 +1,7 @@
+id: var-to-let
+message: "Use let instead of var for block scoping"
+severity: info
+language: javascript
+rule:
+  pattern: var $VAR = $VALUE;
+fix: let $VAR = $VALUE;

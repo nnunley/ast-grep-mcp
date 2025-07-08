@@ -268,3 +268,339 @@ impl SearchService {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::ServiceConfig;
+    use crate::pattern::PatternMatcher;
+    use crate::rules::RuleEvaluator;
+    use std::fs;
+    use std::path::Path;
+    use tempfile::TempDir;
+
+    fn create_test_search_service() -> (SearchService, TempDir) {
+        let temp_dir = TempDir::new().unwrap();
+        let config = ServiceConfig {
+            root_directories: vec![temp_dir.path().to_path_buf()],
+            ..Default::default()
+        };
+        let pattern_matcher = PatternMatcher::new();
+        let rule_evaluator = RuleEvaluator::new();
+
+        (
+            SearchService::new(config, pattern_matcher, rule_evaluator),
+            temp_dir,
+        )
+    }
+
+    fn create_test_file(dir: &Path, name: &str, content: &str) {
+        let file_path = dir.join(name);
+        if let Some(parent) = file_path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(file_path, content).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_search_basic() {
+        let (service, _temp_dir) = create_test_search_service();
+        let code = r#"
+function greet() {
+    console.log("Hello");
+    console.error("Error");
+}
+"#;
+        let param = SearchParam {
+            code: code.to_string(),
+            pattern: "console.log($VAR)".to_string(),
+            language: "javascript".to_string(),
+        };
+
+        let result = service.search(param).await.unwrap();
+        assert_eq!(result.matches.len(), 1);
+        assert!(result.matches[0].text.contains("console.log"));
+    }
+
+    #[tokio::test]
+    async fn test_search_no_matches() {
+        let (service, _temp_dir) = create_test_search_service();
+        let code = "function test() { return 42; }";
+        let param = SearchParam {
+            code: code.to_string(),
+            pattern: "console.log($VAR)".to_string(),
+            language: "javascript".to_string(),
+        };
+
+        let result = service.search(param).await.unwrap();
+        assert_eq!(result.matches.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_search_invalid_language() {
+        let (service, _temp_dir) = create_test_search_service();
+        let param = SearchParam {
+            code: "test".to_string(),
+            pattern: "test".to_string(),
+            language: "invalid_language".to_string(),
+        };
+
+        let result = service.search(param).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_file_search_basic() {
+        let (service, temp_dir) = create_test_search_service();
+
+        // Create test files
+        create_test_file(
+            temp_dir.path(),
+            "test1.js",
+            r#"
+function greet() {
+    console.log("Hello");
+}
+"#,
+        );
+        create_test_file(
+            temp_dir.path(),
+            "test2.js",
+            r#"
+function farewell() {
+    console.error("Bye");
+}
+"#,
+        );
+
+        let param = FileSearchParam {
+            path_pattern: "**/*.js".to_string(),
+            pattern: "console.log($VAR)".to_string(),
+            language: "javascript".to_string(),
+            max_results: 10,
+            max_file_size: 1024 * 1024,
+            cursor: None,
+        };
+
+        let result = service.file_search(param).await.unwrap();
+        assert_eq!(result.matches.len(), 1);
+        assert!(result.matches[0].file_path.ends_with("test1.js"));
+        assert_eq!(result.matches[0].matches.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_file_search_with_cursor() {
+        let (service, temp_dir) = create_test_search_service();
+
+        // Create test files with names that sort predictably
+        create_test_file(temp_dir.path(), "a_test.js", "console.log('a');");
+        create_test_file(temp_dir.path(), "b_test.js", "console.log('b');");
+        create_test_file(temp_dir.path(), "c_test.js", "console.log('c');");
+
+        // First request with limit of 1
+        let param = FileSearchParam {
+            path_pattern: "**/*.js".to_string(),
+            pattern: "console.log($VAR)".to_string(),
+            language: "javascript".to_string(),
+            max_results: 1,
+            max_file_size: 1024 * 1024,
+            cursor: None,
+        };
+
+        let result1 = service.file_search(param.clone()).await.unwrap();
+        assert_eq!(result1.matches.len(), 1);
+        assert!(!result1.next_cursor.as_ref().unwrap().is_complete);
+
+        // Second request using cursor
+        let param2 = FileSearchParam {
+            cursor: result1.next_cursor.map(|c| CursorParam {
+                last_file_path: c.last_file_path,
+                is_complete: c.is_complete,
+            }),
+            ..param
+        };
+
+        let result2 = service.file_search(param2).await.unwrap();
+        assert_eq!(result2.matches.len(), 1);
+
+        // Verify we got a different file
+        assert_ne!(result1.matches[0].file_path, result2.matches[0].file_path);
+    }
+
+    #[tokio::test]
+    async fn test_file_search_complete_cursor() {
+        let (service, _temp_dir) = create_test_search_service();
+
+        let param = FileSearchParam {
+            path_pattern: "**/*.js".to_string(),
+            pattern: "console.log($VAR)".to_string(),
+            language: "javascript".to_string(),
+            max_results: 10,
+            max_file_size: 1024 * 1024,
+            cursor: Some(CursorParam {
+                last_file_path: String::new(),
+                is_complete: true,
+            }),
+        };
+
+        let result = service.file_search(param).await.unwrap();
+        assert_eq!(result.matches.len(), 0);
+        assert!(result.next_cursor.as_ref().unwrap().is_complete);
+    }
+
+    #[tokio::test]
+    async fn test_file_search_size_limit() {
+        let (service, temp_dir) = create_test_search_service();
+
+        // Create a large file
+        let large_content = "console.log('test');".repeat(1000);
+        create_test_file(temp_dir.path(), "large.js", &large_content);
+
+        let param = FileSearchParam {
+            path_pattern: "**/*.js".to_string(),
+            pattern: "console.log($VAR)".to_string(),
+            language: "javascript".to_string(),
+            max_results: 10,
+            max_file_size: 100, // Small limit
+            cursor: None,
+        };
+
+        let result = service.file_search(param).await.unwrap();
+        assert_eq!(result.matches.len(), 0); // File should be skipped due to size
+    }
+
+    #[tokio::test]
+    async fn test_rule_search_basic() {
+        let (service, temp_dir) = create_test_search_service();
+
+        create_test_file(
+            temp_dir.path(),
+            "test.js",
+            r#"
+function greet() {
+    console.log("Hello");
+}
+"#,
+        );
+
+        let rule_config = r#"
+id: test-rule
+language: javascript
+rule:
+  pattern: "console.log($VAR)"
+"#;
+
+        let param = RuleSearchParam {
+            rule_config: rule_config.to_string(),
+            path_pattern: Some("**/*.js".to_string()),
+            max_results: 10,
+            max_file_size: 1024 * 1024,
+            cursor: None,
+        };
+
+        let result = service.rule_search(param).await.unwrap();
+        assert_eq!(result.matches.len(), 1);
+        assert!(result.matches[0].file_path.ends_with("test.js"));
+    }
+
+    #[tokio::test]
+    async fn test_rule_search_default_path_pattern() {
+        let (service, temp_dir) = create_test_search_service();
+
+        create_test_file(temp_dir.path(), "test.js", "console.log('test');");
+
+        let rule_config = r#"
+id: test-rule
+language: javascript
+rule:
+  pattern: "console.log($VAR)"
+"#;
+
+        let param = RuleSearchParam {
+            rule_config: rule_config.to_string(),
+            path_pattern: None, // Should default to "**/*"
+            max_results: 10,
+            max_file_size: 1024 * 1024,
+            cursor: None,
+        };
+
+        let result = service.rule_search(param).await.unwrap();
+        assert_eq!(result.matches.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_rule_search_with_pagination() {
+        let (service, temp_dir) = create_test_search_service();
+
+        // Create multiple matching files
+        for i in 1..=5 {
+            create_test_file(
+                temp_dir.path(),
+                &format!("test{i}.js"),
+                "console.log('test');",
+            );
+        }
+
+        let rule_config = r#"
+id: test-rule
+language: javascript
+rule:
+  pattern: "console.log($VAR)"
+"#;
+
+        let param = RuleSearchParam {
+            rule_config: rule_config.to_string(),
+            path_pattern: Some("**/*.js".to_string()),
+            max_results: 2, // Limit to 2 results
+            max_file_size: 1024 * 1024,
+            cursor: None,
+        };
+
+        let result = service.rule_search(param).await.unwrap();
+        assert_eq!(result.matches.len(), 2);
+        assert!(!result.next_cursor.as_ref().unwrap().is_complete);
+    }
+
+    #[tokio::test]
+    async fn test_rule_search_invalid_rule() {
+        let (service, _temp_dir) = create_test_search_service();
+
+        let param = RuleSearchParam {
+            rule_config: "invalid yaml { content".to_string(),
+            path_pattern: Some("**/*.js".to_string()),
+            max_results: 10,
+            max_file_size: 1024 * 1024,
+            cursor: None,
+        };
+
+        let result = service.rule_search(param).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_rule_search_complete_cursor() {
+        let (service, _temp_dir) = create_test_search_service();
+
+        let rule_config = r#"
+id: test-rule
+language: javascript
+rule:
+  pattern: "console.log($VAR)"
+"#;
+
+        let param = RuleSearchParam {
+            rule_config: rule_config.to_string(),
+            path_pattern: Some("**/*.js".to_string()),
+            max_results: 10,
+            max_file_size: 1024 * 1024,
+            cursor: Some(CursorParam {
+                last_file_path: String::new(),
+                is_complete: true,
+            }),
+        };
+
+        let result = service.rule_search(param).await.unwrap();
+        assert_eq!(result.matches.len(), 0);
+        assert!(result.next_cursor.as_ref().unwrap().is_complete);
+    }
+}
