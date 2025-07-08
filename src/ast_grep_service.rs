@@ -839,6 +839,54 @@ Delete a stored rule configuration by ID.
 3. Apply the rule: `rule_search` or `rule_replace` using the stored rule ID
 4. Manage rules: `list_rules`, `get_rule`, `delete_rule` as needed
 
+## Discovery and Debugging Tools
+
+### generate_ast
+
+Generate a stringified syntax tree for code using Tree-sitter. Useful for debugging patterns and understanding AST structure. **Critical for LLM users to discover available Tree-sitter node kinds for Kind rules.**
+
+**Parameters:**
+- `code`: Source code to parse
+- `language`: Programming language of the code
+
+**Returns:**
+- `ast`: Stringified syntax tree showing the AST structure
+- `language`: Programming language used
+- `code_length`: Length of the input code in characters
+- `node_kinds`: Array of unique Tree-sitter node kinds found in the code
+
+**Example Usage:**
+```json
+{
+  "tool_code": "generate_ast",
+  "tool_params": {
+    "code": "function test() { return 42; }",
+    "language": "javascript"
+  }
+}
+```
+
+**Response includes node kinds like:**
+- `function_declaration`
+- `identifier`
+- `statement_block`
+- `return_statement`
+- `number`
+
+**Using node kinds in Kind rules:**
+```yaml
+rule:
+  kind: function_declaration  # Use any node kind from generate_ast
+```
+
+### list_languages
+
+Lists all supported programming languages for ast-grep patterns.
+
+**No Parameters Required**
+
+**Returns:** Array of supported language identifiers (javascript, typescript, rust, python, etc.)
+
 ## Error Handling
 
 The service returns structured errors for:

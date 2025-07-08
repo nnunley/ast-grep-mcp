@@ -103,10 +103,44 @@ Replace patterns in code strings (for in-memory transformations).
 ### `list_languages`
 Get all supported programming languages.
 
+### `generate_ast`
+🔍 **Essential for LLM users**: Generate syntax trees and discover Tree-sitter node kinds
+```json
+{
+  "code": "function test() { return 42; }",
+  "language": "javascript"
+}
+```
+Returns AST structure and available node kinds like `function_declaration`, `identifier`, `statement_block` for use in Kind rules.
+
 ### `documentation`
 Comprehensive usage examples and best practices.
 
 ## 📖 Pattern Examples
+
+### AST Pattern Language
+```javascript
+// Metavariables capture single nodes
+"console.log($VAR)"
+
+// Multiple statements/expressions
+"function $NAME($ARGS) { $$$BODY }"
+
+// Exact text matching
+"const API_KEY = 'secret'"
+```
+
+### Tree-sitter Node Kinds
+Use `generate_ast` to discover available node kinds for any language:
+```yaml
+# Kind rules match specific AST node types
+rule:
+  kind: function_declaration  # JavaScript/TypeScript
+  # OR
+  kind: fn_item             # Rust
+  # OR
+  kind: function_definition  # Python
+```
 
 ### JavaScript/TypeScript
 ```javascript
@@ -169,9 +203,26 @@ Comprehensive usage examples and best practices.
 ast-grep-mcp
 ```
 
+### With Custom Root Directories
+```bash
+# Search in specific directories
+ast-grep-mcp --root-dir /path/to/project1 --root-dir /path/to/project2
+
+# Short form
+ast-grep-mcp -d /path/to/project1 -d /path/to/project2
+```
+
 ### With Debug Logging
 ```bash
 RUST_LOG=debug ast-grep-mcp
+```
+
+### Full Command Line Options
+```bash
+ast-grep-mcp --help
+# Shows all available options:
+# -d, --root-dir <ROOT_DIRECTORIES>  Root directories to search in
+# --max-file-size <MAX_FILE_SIZE>    Maximum file size in bytes [default: 52428800]
 ```
 
 ### Test Installation
@@ -205,6 +256,102 @@ cargo fmt
 **Enterprise**: Java, C#, Kotlin, Scala
 **Scripting**: Python, Ruby, Lua, Bash
 **Others**: Swift, Dart, Elixir, Haskell, PHP, YAML, JSON
+
+## 🗺️ Development Roadmap
+
+This roadmap outlines planned enhancements to make ast-grep MCP more useful for AI-assisted development workflows.
+
+### 🚀 Phase 1: LLM-Friendly Pattern Discovery (v0.2.0)
+
+**High Priority - Essential for LLM workflows**
+
+- [ ] **`suggest_patterns`** - Given code examples, suggest matching ast-grep patterns
+  - Reduces pattern-writing friction for LLMs
+  - Input: example code → Output: suggested patterns with confidence scores
+
+- [ ] **`analyze_change_impact`** - Analyze potential impact before applying changes
+  - Essential for safe AI-driven refactoring
+  - Returns: affected functions, breaking change risk, test coverage impact
+
+- [ ] **`search_by_intent`** - Natural language code search
+  - "Find all functions that make HTTP requests" → multiple ast-grep patterns
+  - More intuitive than writing complex patterns manually
+
+### 🔧 Phase 2: Semantic Code Understanding (v0.3.0)
+
+**Medium Priority - Enhanced code analysis**
+
+- [ ] **`find_similar_patterns`** - Semantic similarity detection
+  - Find code that does the same thing but looks different
+  - Useful for comprehensive refactoring across different coding styles
+
+- [ ] **`analyze_code_context`** - Extract code relationships
+  - Function signatures, imports, dependencies, call graphs
+  - Provides context LLMs need for informed decisions
+
+- [ ] **`bulk_refactor`** - Multi-step transformation pipeline
+  - Apply multiple rules in sequence with dependency handling
+  - Handles complex refactoring requiring coordinated changes
+
+- [ ] **`verify_transformation_safety`** - Semantic preservation checking
+  - Verify transformations don't change program behavior
+  - AST comparison and basic semantic analysis
+
+### 🧠 Phase 3: Project Intelligence (v0.4.0)
+
+**Lower Priority - Advanced analysis**
+
+- [ ] **`learn_project_patterns`** - Discover codebase conventions
+  - Analyze project to learn patterns, naming conventions, architecture
+  - Enables context-aware suggestions for specific projects
+
+- [ ] **`detect_code_smells`** - Predefined anti-pattern detection
+  - Common code smell detection with explanations and fixes
+  - Extensible rule system for custom smell detection
+
+- [ ] **`generate_test_cases`** - Automated test generation
+  - Generate tests for code matching certain patterns
+  - Ensures transformations are properly validated
+
+- [ ] **`extract_documentation`** - Smart documentation extraction
+  - Extract and format docs from code patterns
+  - Helps LLMs understand unfamiliar codebases quickly
+
+- [ ] **`suggest_project_rules`** - Consistency rule generation
+  - Based on project analysis, suggest custom rules
+  - Maintains consistency during AI-assisted development
+
+### 🔍 Implementation Status
+
+**Current Version: v0.1.0**
+- ✅ Core ast-grep pattern matching
+- ✅ Rule-based search and replace
+- ✅ Tree-sitter node kind discovery
+- ✅ Token-efficient diff output
+- ✅ MCP service integration
+
+**Next Milestones:**
+- 🔄 Fix failing end-to-end tests
+- 🎯 Phase 1: Pattern discovery tools
+- 🎯 Phase 2: Semantic understanding
+- 🎯 Phase 3: Project intelligence
+
+### 💡 Vision: AI-Native Code Understanding
+
+Transform ast-grep from a pattern matching tool into an AI-native platform that:
+- **Understands intent** rather than just syntax
+- **Provides context** for informed AI decisions
+- **Ensures safety** through impact analysis
+- **Learns from codebases** to provide relevant suggestions
+- **Bridges the gap** between natural language and code patterns
+
+### 🤝 Contributing to the Roadmap
+
+We welcome contributions to any roadmap items:
+
+1. **High Priority Items**: `suggest_patterns`, `analyze_change_impact`, `search_by_intent`
+2. **Good First Issues**: Documentation improvements, test coverage
+3. **Advanced Features**: Semantic analysis, ML-based pattern suggestion
 
 ## 🤝 Contributing
 

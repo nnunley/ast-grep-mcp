@@ -7,6 +7,7 @@ use ast_grep_language::SupportLang as Language;
 // Removed unused imports
 use globset::{Glob, GlobSetBuilder};
 use sha2::{Digest, Sha256};
+use std::path::PathBuf;
 use std::str::FromStr;
 use walkdir::WalkDir;
 
@@ -180,14 +181,6 @@ impl SearchService {
         // Use path pattern or default to all files
         let path_pattern = param.path_pattern.unwrap_or_else(|| "**/*".to_string());
 
-        let glob = Glob::new(&path_pattern)
-            .map_err(|e| ServiceError::Internal(format!("Invalid glob pattern: {e}")))?;
-        let mut glob_builder = GlobSetBuilder::new();
-        glob_builder.add(glob);
-        let glob_set = glob_builder
-            .build()
-            .map_err(|e| ServiceError::Internal(format!("Failed to build glob set: {e}")))?;
-
         let mut file_results = Vec::new();
         let mut total_files_found = 0;
         let mut files_processed = 0;
@@ -195,7 +188,48 @@ impl SearchService {
         // Determine starting point for pagination
         let start_after = param.cursor.as_ref().map(|c| c.last_file_path.clone());
 
-        for root_dir in &self.config.root_directories {
+        // Handle absolute paths vs relative patterns
+        let (search_paths, file_pattern) = if path_pattern.contains("**") {
+            // Glob pattern - split on ** to get directory prefix and file pattern
+            let pattern_parts: Vec<&str> = path_pattern.split("**").collect();
+            if pattern_parts.len() >= 2 && !pattern_parts[0].is_empty() {
+                let prefix = pattern_parts[0].trim_end_matches('/');
+                let suffix = pattern_parts[1].trim_start_matches('/');
+                let search_path = if prefix.is_empty() {
+                    self.config.root_directories.clone()
+                } else {
+                    vec![PathBuf::from(prefix)]
+                };
+                (search_path, suffix.to_string())
+            } else {
+                (self.config.root_directories.clone(), "**/*".to_string())
+            }
+        } else if path_pattern.starts_with('/') {
+            // Absolute path - extract the directory part and filename
+            let path = PathBuf::from(&path_pattern);
+            if let Some(parent) = path.parent() {
+                let filename = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("*")
+                    .to_string();
+                (vec![parent.to_path_buf()], filename)
+            } else {
+                (self.config.root_directories.clone(), path_pattern.clone())
+            }
+        } else {
+            (self.config.root_directories.clone(), path_pattern.clone())
+        };
+
+        let glob = Glob::new(&file_pattern)
+            .map_err(|e| ServiceError::Internal(format!("Invalid glob pattern: {e}")))?;
+        let mut glob_builder = GlobSetBuilder::new();
+        glob_builder.add(glob);
+        let glob_set = glob_builder
+            .build()
+            .map_err(|e| ServiceError::Internal(format!("Failed to build glob set: {e}")))?;
+
+        for root_dir in &search_paths {
             for entry in WalkDir::new(root_dir)
                 .max_depth(10)
                 .into_iter()
