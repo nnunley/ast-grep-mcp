@@ -4,7 +4,12 @@ severity: error
 language: typescript
 rule:
   any:
-    - pattern: "$VAR: any"
-    - pattern: "any[]"
-    - pattern: "function $FUNC($ARGS: any)"
-    - pattern: "($ARGS: any) => $RETURN"
+    - pattern: "let $_: any"
+    - pattern: "const $_: any"
+    - pattern: "let $_: any[]"
+    - pattern: "const $_: any[]"
+    - pattern: "$_: any[]"
+    - pattern: "($_: any)"
+    - pattern: "($_: any) => $_"
+    - pattern: "function $FUNC($PARAM: any)"
+    - pattern: "function $FUNC($_: any): $_"

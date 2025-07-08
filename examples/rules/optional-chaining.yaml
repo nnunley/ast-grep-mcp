@@ -3,5 +3,7 @@ message: "Use optional chaining instead of defensive checks"
 severity: info
 language: typescript
 rule:
-  pattern: $PROP && $PROP()
+  any:
+    - pattern: $PROP && $PROP()
+    - pattern: $PROP && $PROP($$ARGS)
 fix: $PROP?.()

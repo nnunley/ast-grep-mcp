@@ -457,40 +457,129 @@ impl RuleEvaluator {
             return Ok(vec![]);
         }
 
-        // For All rules, we need to find nodes that satisfy ALL conditions
-        // This means finding nodes that match the primary rule and also contain/satisfy other rules
+        // Use fold to reduce rules into a filtered set of candidates
+        all_rules
+            .iter()
+            .enumerate()
+            .try_fold(vec![], |candidates, (i, rule)| {
+                if i == 0 {
+                    // First rule: get initial candidates
+                    self.evaluate_rule(rule, code, lang)
+                } else {
+                    // Subsequent rules: filter existing candidates
+                    // Early exit optimization: if no candidates, short-circuit
+                    if candidates.is_empty() {
+                        Ok(vec![])
+                    } else {
+                        self.filter_candidates_by_rule(candidates, rule, code, lang)
+                    }
+                }
+            })
+    }
 
-        // Start with matches from the first rule as potential candidates
-        let primary_matches = self.evaluate_rule(&all_rules[0], code, lang)?;
+    /// Filter candidates based on a rule constraint
+    fn filter_candidates_by_rule(
+        &self,
+        candidates: Vec<MatchResult>,
+        rule: &Rule,
+        code: &str,
+        lang: Language,
+    ) -> Result<Vec<MatchResult>, ServiceError> {
+        match rule {
+            // For Has rules: keep candidates that contain the pattern
+            Rule::Has { rule: _, contains } => {
+                let mut filtered = Vec::new();
+                let contains_matches = self.evaluate_rule(contains, code, lang)?;
 
-        // Filter candidates that also satisfy all other rules
-        let mut result_matches = Vec::new();
+                for candidate in candidates {
+                    // Check if any contains_match is within this candidate
+                    let has_match = contains_matches
+                        .iter()
+                        .any(|m| self.is_match_contained_in(&candidate, m));
 
-        for primary_match in primary_matches {
-            let mut satisfies_all = true;
+                    if has_match {
+                        filtered.push(candidate);
+                    }
+                }
+                Ok(filtered)
+            }
 
-            // Check if this match satisfies all other rules
-            for rule in &all_rules[1..] {
-                let rule_matches = self.evaluate_rule(rule, code, lang)?;
+            // For Inside rules: keep candidates that are inside the pattern
+            Rule::Inside { rule: _, inside_of } => {
+                let mut filtered = Vec::new();
+                let container_matches = self.evaluate_rule(inside_of, code, lang)?;
 
-                // Check if any rule match is contained within or overlaps with the primary match
-                let satisfies_rule = rule_matches.iter().any(|rule_match| {
-                    self.is_match_contained_in(&primary_match, rule_match)
-                        || self.matches_overlap(&primary_match, rule_match)
-                });
+                for candidate in candidates {
+                    // Check if this candidate is inside any container
+                    let is_inside = container_matches
+                        .iter()
+                        .any(|container| self.is_match_contained_in(container, &candidate));
 
-                if !satisfies_rule {
-                    satisfies_all = false;
-                    break;
+                    if is_inside {
+                        filtered.push(candidate);
+                    }
+                }
+                Ok(filtered)
+            }
+
+            // For Not rules: keep candidates that don't match the sub-rule
+            Rule::Not(not_rule) => {
+                match not_rule.as_ref() {
+                    // Special handling for "not has" pattern
+                    Rule::Has { rule: _, contains } => {
+                        let mut filtered = Vec::new();
+                        let contains_matches = self.evaluate_rule(contains, code, lang)?;
+
+                        for candidate in candidates {
+                            // Check if any contains_match is within this candidate
+                            let has_match = contains_matches
+                                .iter()
+                                .any(|m| self.is_match_contained_in(&candidate, m));
+
+                            // Keep candidates that DON'T have the match
+                            if !has_match {
+                                filtered.push(candidate);
+                            }
+                        }
+                        Ok(filtered)
+                    }
+                    _ => {
+                        // For other not rules, evaluate normally
+                        let not_matches = self.evaluate_rule(not_rule, code, lang)?;
+                        Ok(candidates
+                            .into_iter()
+                            .filter(|candidate| {
+                                !not_matches
+                                    .iter()
+                                    .any(|m| self.matches_overlap(candidate, m))
+                            })
+                            .collect())
+                    }
                 }
             }
 
-            if satisfies_all {
-                result_matches.push(primary_match);
+            // For Regex rules: check if candidate text matches the regex
+            Rule::Regex(regex_pattern) => {
+                let regex = Regex::new(regex_pattern)?;
+                Ok(candidates
+                    .into_iter()
+                    .filter(|candidate| regex.is_match(&candidate.text))
+                    .collect())
+            }
+
+            // For other rules: use overlap logic
+            _ => {
+                let rule_matches = self.evaluate_rule(rule, code, lang)?;
+                Ok(candidates
+                    .into_iter()
+                    .filter(|candidate| {
+                        rule_matches
+                            .iter()
+                            .any(|m| self.matches_overlap(candidate, m))
+                    })
+                    .collect())
             }
         }
-
-        Ok(result_matches)
     }
 
     fn evaluate_any_rule_enum(

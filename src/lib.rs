@@ -2,6 +2,7 @@ pub mod ast_grep_service;
 pub mod ast_utils;
 pub mod config;
 pub mod errors;
+pub mod path_validation;
 pub mod pattern;
 pub mod replace;
 pub mod rules;
