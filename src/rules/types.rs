@@ -155,3 +155,19 @@ fn default_true() -> bool {
 fn default_false() -> bool {
     false
 }
+
+// Relational rule type for inside, has, follows, precedes
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelationalRule {
+    pub pattern: Option<PatternSpec>,
+    pub kind: Option<String>,
+    pub regex: Option<String>,
+    pub inside: Option<Box<RelationalRule>>,
+    pub has: Option<Box<RelationalRule>>,
+    pub follows: Option<Box<RelationalRule>>,
+    pub precedes: Option<Box<RelationalRule>>,
+    pub all: Option<Vec<RelationalRule>>,
+    pub any: Option<Vec<RelationalRule>>,
+    pub not: Option<Box<RelationalRule>>,
+    pub matches: Option<String>,
+}

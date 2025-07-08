@@ -1,8 +1,6 @@
 use std::fs;
 
-use ast_grep_mcp::ast_grep_service::{
-    AstGrepService, FileReplaceParam, FileSearchParam,
-};
+use ast_grep_mcp::ast_grep_service::{AstGrepService, FileReplaceParam, FileSearchParam};
 use ast_grep_mcp::config::ServiceConfig;
 use tempfile::TempDir;
 
