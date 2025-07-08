@@ -1,3 +1,4 @@
+use super::ast::{PatternRule, Rule};
 use super::types::{PatternSpec, RuleObject};
 use crate::errors::ServiceError;
 use crate::types::MatchResult;
@@ -25,7 +26,53 @@ impl RuleEvaluator {
         Self::default()
     }
 
+    /// Evaluate a Rule enum against code
+    pub fn evaluate_rule(
+        &self,
+        rule: &Rule,
+        code: &str,
+        lang: Language,
+    ) -> Result<Vec<MatchResult>, ServiceError> {
+        match rule {
+            Rule::Pattern(pattern_rule) => {
+                self.evaluate_pattern_rule_enum(pattern_rule, code, lang)
+            }
+            Rule::Kind(kind) => self.evaluate_kind_rule(kind, code, lang),
+            Rule::Regex(regex) => self.evaluate_regex_rule(regex, code, lang),
+            Rule::Matches(_matches) => {
+                // TODO: Implement matches rule - needs access to rule storage
+                Err(ServiceError::ParserError(
+                    "Matches rule evaluation not yet implemented".into(),
+                ))
+            }
+            Rule::All(rules) => self.evaluate_all_rule_enum(rules, code, lang),
+            Rule::Any(rules) => self.evaluate_any_rule_enum(rules, code, lang),
+            Rule::Not(rule) => self.evaluate_not_rule_enum(rule, code, lang),
+            Rule::Inside { rule, inside_of } => {
+                self.evaluate_inside_rule_enum(rule, inside_of, code, lang)
+            }
+            Rule::Has { rule, contains } => self.evaluate_has_rule_enum(rule, contains, code, lang),
+            Rule::Follows { rule, after } => {
+                self.evaluate_follows_rule_enum(rule, after, code, lang)
+            }
+            Rule::Precedes { rule, before } => {
+                self.evaluate_precedes_rule_enum(rule, before, code, lang)
+            }
+        }
+    }
+
     pub fn evaluate_rule_against_code(
+        &self,
+        rule: &RuleObject,
+        code: &str,
+        lang: Language,
+    ) -> Result<Vec<MatchResult>, ServiceError> {
+        // Convert RuleObject to Rule and use the new evaluation method
+        let rule_enum = Rule::from(rule.clone());
+        self.evaluate_rule(&rule_enum, code, lang)
+    }
+
+    pub fn evaluate_rule_against_code_old(
         &self,
         rule: &RuleObject,
         code: &str,
@@ -332,6 +379,161 @@ impl RuleEvaluator {
     ) -> Result<Vec<MatchResult>, ServiceError> {
         // TODO: Implement precedes rule evaluation using proper AST node relationships
         // This requires understanding the exact ast-grep rule syntax
+        Err(ServiceError::ParserError(
+            "Precedes rule evaluation not yet implemented".into(),
+        ))
+    }
+
+    // Enum-based evaluation methods
+
+    fn evaluate_pattern_rule_enum(
+        &self,
+        pattern_rule: &PatternRule,
+        code: &str,
+        lang: Language,
+    ) -> Result<Vec<MatchResult>, ServiceError> {
+        let pattern_str = match pattern_rule {
+            PatternRule::Simple { pattern } => pattern.clone(),
+            PatternRule::Advanced { pattern, .. } => pattern.clone(),
+        };
+
+        let ast = AstGrep::new(code, lang);
+        let pattern = self.get_or_create_pattern(&pattern_str, lang)?;
+
+        let matches: Vec<MatchResult> = ast
+            .root()
+            .find_all(pattern)
+            .map(|node| MatchResult::from_node_match(&node))
+            .collect();
+
+        Ok(matches)
+    }
+
+    fn evaluate_all_rule_enum(
+        &self,
+        all_rules: &[Rule],
+        code: &str,
+        lang: Language,
+    ) -> Result<Vec<MatchResult>, ServiceError> {
+        if all_rules.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Start with matches from the first rule
+        let mut intersection_matches = self.evaluate_rule(&all_rules[0], code, lang)?;
+
+        // For each subsequent rule, find intersection with current matches
+        for rule in &all_rules[1..] {
+            let rule_matches = self.evaluate_rule(rule, code, lang)?;
+            intersection_matches = self.intersect_matches(intersection_matches, rule_matches);
+        }
+
+        Ok(intersection_matches)
+    }
+
+    fn evaluate_any_rule_enum(
+        &self,
+        any_rules: &[Rule],
+        code: &str,
+        lang: Language,
+    ) -> Result<Vec<MatchResult>, ServiceError> {
+        let mut all_matches = Vec::new();
+
+        // Collect matches from all rules
+        for rule in any_rules {
+            let mut rule_matches = self.evaluate_rule(rule, code, lang)?;
+            all_matches.append(&mut rule_matches);
+        }
+
+        // Remove duplicates based on text content and position
+        all_matches.sort_by_key(|m| (m.start_line, m.start_col, m.text.clone()));
+        all_matches.dedup_by_key(|m| (m.start_line, m.start_col, m.text.clone()));
+
+        Ok(all_matches)
+    }
+
+    fn evaluate_not_rule_enum(
+        &self,
+        not_rule: &Rule,
+        code: &str,
+        lang: Language,
+    ) -> Result<Vec<MatchResult>, ServiceError> {
+        // Get all potential nodes by using a catch-all pattern
+        let catch_all_pattern = "$_";
+        let ast = AstGrep::new(code, lang);
+        let pattern = self.get_or_create_pattern(catch_all_pattern, lang)?;
+
+        let all_nodes: Vec<MatchResult> = ast
+            .root()
+            .find_all(pattern)
+            .map(|node| MatchResult::from_node_match(&node))
+            .collect();
+
+        // Get matches from the NOT rule
+        let not_matches = self.evaluate_rule(not_rule, code, lang)?;
+
+        // Return nodes that don't match the NOT rule
+        let filtered_matches: Vec<MatchResult> = all_nodes
+            .into_iter()
+            .filter(|node| {
+                !not_matches.iter().any(|not_match| {
+                    node.start_line == not_match.start_line
+                        && node.start_col == not_match.start_col
+                        && node.text == not_match.text
+                })
+            })
+            .collect();
+
+        Ok(filtered_matches)
+    }
+
+    fn evaluate_inside_rule_enum(
+        &self,
+        _rule: &Rule,
+        _inside_of: &Rule,
+        _code: &str,
+        _lang: Language,
+    ) -> Result<Vec<MatchResult>, ServiceError> {
+        // TODO: Implement inside rule evaluation using proper AST node relationships
+        Err(ServiceError::ParserError(
+            "Inside rule evaluation not yet implemented".into(),
+        ))
+    }
+
+    fn evaluate_has_rule_enum(
+        &self,
+        _rule: &Rule,
+        _contains: &Rule,
+        _code: &str,
+        _lang: Language,
+    ) -> Result<Vec<MatchResult>, ServiceError> {
+        // TODO: Implement has rule evaluation using proper AST node relationships
+        Err(ServiceError::ParserError(
+            "Has rule evaluation not yet implemented".into(),
+        ))
+    }
+
+    fn evaluate_follows_rule_enum(
+        &self,
+        _rule: &Rule,
+        _after: &Rule,
+        _code: &str,
+        _lang: Language,
+    ) -> Result<Vec<MatchResult>, ServiceError> {
+        // TODO: Implement follows rule evaluation using proper AST node relationships
+        Err(ServiceError::ParserError(
+            "Follows rule evaluation not yet implemented".into(),
+        ))
+    }
+
+    fn evaluate_precedes_rule_enum(
+        &self,
+        _rule: &Rule,
+        _before: &Rule,
+        _code: &str,
+        _lang: Language,
+    ) -> Result<Vec<MatchResult>, ServiceError> {
+        // TODO: Implement precedes rule evaluation using proper AST node relationships
         Err(ServiceError::ParserError(
             "Precedes rule evaluation not yet implemented".into(),
         ))

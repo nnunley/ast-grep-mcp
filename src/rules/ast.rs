@@ -133,7 +133,7 @@ impl From<super::types::RuleObject> for Rule {
                     selector,
                     strictness,
                 } => Rule::Pattern(PatternRule::Advanced {
-                    pattern: context,
+                    pattern: context.clone(),
                     context: Some(context),
                     selector,
                     strictness,
