@@ -1,13 +1,13 @@
 use crate::config::ServiceConfig;
 use crate::errors::ServiceError;
+use crate::path_validation::validate_path_pattern;
 use crate::pattern::PatternMatcher;
-use crate::rules::{RuleEvaluator, RuleSearchParam, parse_rule_config};
+use crate::rules::{RuleEvaluator, RuleSearchParam, ast::Rule, parse_rule_config};
 use crate::types::*;
 use ast_grep_language::SupportLang as Language;
 // Removed unused imports
 use globset::{Glob, GlobSetBuilder};
 use sha2::{Digest, Sha256};
-use std::path::PathBuf;
 use std::str::FromStr;
 use walkdir::WalkDir;
 
@@ -63,7 +63,10 @@ impl SearchService {
         let lang = Language::from_str(&param.language)
             .map_err(|_| ServiceError::Internal("Failed to parse language".to_string()))?;
 
-        let glob = Glob::new(&param.path_pattern)
+        // Validate the path pattern for security
+        let validated_pattern = validate_path_pattern(&param.path_pattern)?;
+
+        let glob = Glob::new(&validated_pattern)
             .map_err(|e| ServiceError::Internal(format!("Invalid glob pattern: {e}")))?;
         let mut glob_builder = GlobSetBuilder::new();
         glob_builder.add(glob);
@@ -71,23 +74,45 @@ impl SearchService {
             .build()
             .map_err(|e| ServiceError::Internal(format!("Failed to build glob set: {e}")))?;
 
+        let glob_set = std::sync::Arc::new(glob_set);
+
         // Collect all potential files first
         let all_files: Vec<(String, u64)> = self
             .config
             .root_directories
             .iter()
             .flat_map(|root_dir| {
+                let root_dir_clone = root_dir.clone();
+                let pattern_clone = validated_pattern.clone();
+                let glob_set_clone = glob_set.clone();
                 WalkDir::new(root_dir)
                     .max_depth(10)
                     .into_iter()
                     .filter_map(|e| e.ok())
                     .filter(|e| e.file_type().is_file())
-                    .filter_map(|entry| {
+                    .filter_map(move |entry| {
                         let path = entry.path();
                         let path_str = path.to_string_lossy().to_string();
 
-                        // Check if matches glob pattern
-                        if !glob_set.is_match(&path_str) {
+                        // For relative patterns, check against relative path
+                        let matches =
+                            if pattern_clone.starts_with("**") || pattern_clone.contains('/') {
+                                // Try matching against relative path from root
+                                if let Ok(rel_path) = path.strip_prefix(&root_dir_clone) {
+                                    glob_set_clone.is_match(rel_path.to_string_lossy().as_ref())
+                                } else {
+                                    glob_set_clone.is_match(&path_str)
+                                }
+                            } else {
+                                // For simple patterns like "*.js", match against filename
+                                if let Some(file_name) = path.file_name() {
+                                    glob_set_clone.is_match(file_name.to_string_lossy().as_ref())
+                                } else {
+                                    false
+                                }
+                            };
+
+                        if !matches {
                             return None;
                         }
 
@@ -181,6 +206,9 @@ impl SearchService {
         // Use path pattern or default to all files
         let path_pattern = param.path_pattern.unwrap_or_else(|| "**/*".to_string());
 
+        // Validate the path pattern for security
+        let validated_pattern = validate_path_pattern(&path_pattern)?;
+
         let mut file_results = Vec::new();
         let mut total_files_found = 0;
         let mut files_processed = 0;
@@ -188,40 +216,85 @@ impl SearchService {
         // Determine starting point for pagination
         let start_after = param.cursor.as_ref().map(|c| c.last_file_path.clone());
 
-        // Handle absolute paths vs relative patterns
-        let (search_paths, file_pattern) = if path_pattern.contains("**") {
-            // Glob pattern - split on ** to get directory prefix and file pattern
-            let pattern_parts: Vec<&str> = path_pattern.split("**").collect();
-            if pattern_parts.len() >= 2 && !pattern_parts[0].is_empty() {
-                let prefix = pattern_parts[0].trim_end_matches('/');
-                let suffix = pattern_parts[1].trim_start_matches('/');
-                let search_path = if prefix.is_empty() {
-                    self.config.root_directories.clone()
-                } else {
-                    vec![PathBuf::from(prefix)]
-                };
-                (search_path, suffix.to_string())
-            } else {
-                (self.config.root_directories.clone(), "**/*".to_string())
+        // Determine search roots and pattern
+        let (search_roots, glob_pattern) = if validated_pattern.starts_with('/') {
+            // Absolute path pattern - check if it's within any root
+            let mut found_root = None;
+            let mut relative_pattern = None;
+
+            // Try to extract the directory part of the pattern to canonicalize it
+            let pattern_parts: Vec<&str> = validated_pattern.split('/').collect();
+            let mut dir_end_idx = pattern_parts.len();
+
+            // Find where the glob pattern starts (contains *, ?, [, etc.)
+            for (i, part) in pattern_parts.iter().enumerate() {
+                if part.contains('*') || part.contains('?') || part.contains('[') {
+                    dir_end_idx = i;
+                    break;
+                }
             }
-        } else if path_pattern.starts_with('/') {
-            // Absolute path - extract the directory part and filename
-            let path = PathBuf::from(&path_pattern);
-            if let Some(parent) = path.parent() {
-                let filename = path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("*")
-                    .to_string();
-                (vec![parent.to_path_buf()], filename)
+
+            // Build the directory path and glob suffix
+            let dir_path = pattern_parts[..dir_end_idx].join("/");
+            let glob_suffix = if dir_end_idx < pattern_parts.len() {
+                pattern_parts[dir_end_idx..].join("/")
             } else {
-                (self.config.root_directories.clone(), path_pattern.clone())
+                String::new()
+            };
+
+            // Try to canonicalize the directory part
+            let canonical_pattern_dir =
+                if let Ok(canonical) = std::path::Path::new(&dir_path).canonicalize() {
+                    canonical.to_string_lossy().to_string()
+                } else {
+                    dir_path
+                };
+
+            for root in &self.config.root_directories {
+                if let Ok(canonical_root) = root.canonicalize() {
+                    let root_str = canonical_root.to_string_lossy();
+                    if canonical_pattern_dir.starts_with(root_str.as_ref()) {
+                        found_root = Some(root.clone());
+                        // Extract the relative pattern from the root
+                        let relative_dir = canonical_pattern_dir
+                            .strip_prefix(root_str.as_ref())
+                            .unwrap_or(&canonical_pattern_dir);
+                        let relative_dir = relative_dir.strip_prefix('/').unwrap_or(relative_dir);
+
+                        // Combine relative directory with glob suffix
+                        relative_pattern = Some(if glob_suffix.is_empty() {
+                            relative_dir.to_string()
+                        } else if relative_dir.is_empty() {
+                            glob_suffix
+                        } else {
+                            format!("{relative_dir}/{glob_suffix}")
+                        });
+                        break;
+                    }
+                }
+            }
+
+            match (found_root, relative_pattern) {
+                (Some(root), Some(pattern)) => {
+                    // Pattern is within an allowed root
+                    (vec![root], pattern)
+                }
+                _ => {
+                    // Absolute path is not within any allowed root
+                    return Err(ServiceError::Internal(
+                        "Path is outside allowed directories".to_string(),
+                    ));
+                }
             }
         } else {
-            (self.config.root_directories.clone(), path_pattern.clone())
+            // Relative pattern - search in all roots
+            (
+                self.config.root_directories.clone(),
+                validated_pattern.clone(),
+            )
         };
 
-        let glob = Glob::new(&file_pattern)
+        let glob = Glob::new(&glob_pattern)
             .map_err(|e| ServiceError::Internal(format!("Invalid glob pattern: {e}")))?;
         let mut glob_builder = GlobSetBuilder::new();
         glob_builder.add(glob);
@@ -229,7 +302,7 @@ impl SearchService {
             .build()
             .map_err(|e| ServiceError::Internal(format!("Failed to build glob set: {e}")))?;
 
-        for root_dir in &search_paths {
+        for root_dir in &search_roots {
             for entry in WalkDir::new(root_dir)
                 .max_depth(10)
                 .into_iter()
@@ -246,7 +319,14 @@ impl SearchService {
                     }
                 }
 
-                if glob_set.is_match(path_str.as_ref()) {
+                // Check if path matches the glob pattern
+                let matches = if let Ok(rel_path) = path.strip_prefix(root_dir) {
+                    glob_set.is_match(rel_path.to_string_lossy().as_ref())
+                } else {
+                    glob_set.is_match(path_str.as_ref())
+                };
+
+                if matches {
                     // Check file size
                     if let Ok(metadata) = entry.metadata() {
                         if metadata.len() > param.max_file_size {
@@ -256,9 +336,11 @@ impl SearchService {
 
                     // Read and search file
                     if let Ok(content) = std::fs::read_to_string(path) {
+                        // Convert RuleObject to Rule enum and use new evaluation
+                        let rule_enum = Rule::from(rule.rule.clone());
                         let matches = self
                             .rule_evaluator
-                            .evaluate_rule_against_code(&rule.rule, &content, lang)?;
+                            .evaluate_rule(&rule_enum, &content, lang)?;
 
                         if !matches.is_empty() {
                             total_files_found += 1;

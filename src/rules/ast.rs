@@ -167,17 +167,44 @@ impl From<super::types::RuleObject> for Rule {
             return Rule::Not(Box::new(Rule::from(*not_rule)));
         }
 
-        // Relational rules - for now, create a placeholder
-        // TODO: Properly handle relational rules once we understand the exact structure
-        if obj.inside.is_some()
-            || obj.has.is_some()
-            || obj.follows.is_some()
-            || obj.precedes.is_some()
-        {
-            // Return a simple pattern that will never match as a placeholder
-            return Rule::Pattern(PatternRule::Simple {
-                pattern: "$$PLACEHOLDER$$".to_string(),
-            });
+        // Inside relational rule - for standalone relational rules in 'all' arrays
+        if let Some(inside_rule) = obj.inside {
+            return Rule::Inside {
+                rule: Box::new(Rule::Pattern(PatternRule::Simple {
+                    pattern: "$_".to_string(),
+                })),
+                inside_of: Box::new(Rule::from(*inside_rule)),
+            };
+        }
+
+        // Has relational rule - for standalone relational rules in 'all' arrays
+        if let Some(has_rule) = obj.has {
+            return Rule::Has {
+                rule: Box::new(Rule::Pattern(PatternRule::Simple {
+                    pattern: "$_".to_string(),
+                })),
+                contains: Box::new(Rule::from(*has_rule)),
+            };
+        }
+
+        // Follows relational rule
+        if let Some(follows_rule) = obj.follows {
+            return Rule::Follows {
+                rule: Box::new(Rule::Pattern(PatternRule::Simple {
+                    pattern: "$_".to_string(),
+                })),
+                after: Box::new(Rule::from(*follows_rule)),
+            };
+        }
+
+        // Precedes relational rule
+        if let Some(precedes_rule) = obj.precedes {
+            return Rule::Precedes {
+                rule: Box::new(Rule::Pattern(PatternRule::Simple {
+                    pattern: "$_".to_string(),
+                })),
+                before: Box::new(Rule::from(*precedes_rule)),
+            };
         }
 
         // Default to an empty All rule if nothing matches

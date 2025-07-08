@@ -8,7 +8,7 @@ rule:
     - has:
         pattern: console.log($MSG)
     - inside:
-        pattern: class $CLASS { $METHODS }
+        pattern: class $CLASS { $$$METHODS }
     - not:
         has:
           pattern: return $VALUE
