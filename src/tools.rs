@@ -225,6 +225,18 @@ impl ToolService {
                         "required": ["rule_url"]
                     })).unwrap()),
                 },
+                Tool {
+                    name: "generate_ast".into(),
+                    description: "Generate a stringified syntax tree for code using Tree-sitter. Useful for debugging patterns and understanding AST structure. Also returns available node kinds for Kind rules.".into(),
+                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "code": { "type": "string", "description": "Source code to parse" },
+                            "language": { "type": "string", "description": "Programming language of the code" }
+                        },
+                        "required": ["code", "language"]
+                    })).unwrap()),
+                },
             ],
             ..Default::default()
         }
@@ -423,6 +435,33 @@ Import rules from the online catalog
 **Multi-statement:** `$$$STATEMENTS`
 **Optional elements:** Use composite rules with `any`
 **Complex matching:** Combine `pattern`, `kind`, `regex` in rules
+
+## Discovery Tools
+
+### generate_ast
+Generate syntax tree and discover node kinds for writing Kind rules
+```json
+{
+  "code": "function test() { return 42; }",
+  "language": "javascript"
+}
+```
+
+Returns the AST structure and available Tree-sitter node kinds like:
+- `function_declaration`
+- `identifier`
+- `statement_block`
+- `return_statement`
+- `number`
+
+Use these node kinds in Kind rules:
+```yaml
+rule:
+  kind: function_declaration
+```
+
+### list_languages
+Get all supported programming languages for ast-grep patterns.
 
 ## Performance Features
 
