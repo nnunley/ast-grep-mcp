@@ -16,8 +16,6 @@ use std::{
 use ast_grep_core::{AstGrep, Pattern, Position, tree_sitter::StrDoc};
 use ast_grep_language::SupportLang as Language;
 // Removed unused base64 import
-use futures::stream::{self, StreamExt};
-use globset::{Glob, GlobSetBuilder};
 use rmcp::{
     ServerHandler,
     model::{
@@ -28,7 +26,6 @@ use rmcp::{
 };
 // Removed unused serde imports
 use sha2::{Digest, Sha256};
-use walkdir::WalkDir;
 
 #[derive(Clone)]
 pub struct AstGrepService {
@@ -128,6 +125,7 @@ impl AstGrepService {
         }
     }
 
+    #[allow(dead_code)]
     fn calculate_file_hash(content: &str) -> String {
         let mut hasher = Sha256::new();
         hasher.update(content.as_bytes());
@@ -272,6 +270,7 @@ impl AstGrepService {
         }
     }
 
+    #[allow(dead_code)]
     fn is_simple_pattern_rule(&self, rule: &RuleObject) -> bool {
         // Check if this is a simple pattern rule that we can handle directly
         rule.pattern.is_some()
@@ -826,29 +825,7 @@ impl AstGrepService {
 
     #[tracing::instrument(skip(self), fields(language = %param.language, pattern = %param.pattern, replacement = %param.replacement))]
     pub async fn replace(&self, param: ReplaceParam) -> Result<ReplaceResult, ServiceError> {
-        let lang = self.parse_language(param.language.as_str())?;
-
-        let mut ast = AstGrep::new(param.code.as_str(), lang);
-        let pattern = self.get_or_create_pattern(&param.pattern, lang)?;
-        let replacement = param.replacement.as_str();
-
-        // Find all matches and replace them manually
-        let mut changed = true;
-        while changed {
-            // Safety limit to prevent infinite loops
-            changed = false;
-            if let Some(_node) = ast.root().find(pattern.clone()) {
-                if ast.replace(pattern.clone(), replacement).is_ok() {
-                    changed = true;
-                }
-            }
-        }
-        let rewritten_code = ast.root().text().to_string();
-
-        Ok(ReplaceResult {
-            new_code: rewritten_code,
-            changes: vec![],
-        })
+        self.replace_service.replace(param).await
     }
 
     #[tracing::instrument(skip(self), fields(language = %param.language, pattern = %param.pattern, replacement = %param.replacement, path_pattern = %param.path_pattern, dry_run = %param.dry_run, summary_only = %param.summary_only))]
@@ -856,276 +833,13 @@ impl AstGrepService {
         &self,
         param: FileReplaceParam,
     ) -> Result<FileReplaceResult, ServiceError> {
-        let lang = self.parse_language(param.language.as_str())?;
-
-        let mut builder = GlobSetBuilder::new();
-        builder.add(Glob::new(&param.path_pattern)?);
-        let globset = builder.build()?;
-
-        let max_file_size = param.max_file_size;
-        let max_results = param.max_results;
-
-        // Determine cursor position for pagination
-        let cursor_path = if let Some(cursor) = &param.cursor {
-            if cursor.is_complete {
-                return Ok(FileReplaceResult {
-                    file_results: vec![],
-                    summary_results: vec![],
-                    next_cursor: Some(CursorResult {
-                        last_file_path: String::new(),
-                        is_complete: true,
-                    }),
-                    total_files_found: 0,
-                    dry_run: param.dry_run,
-                    total_changes: 0,
-                    files_with_changes: 0,
-                });
-            }
-            Some(cursor.last_file_path.clone())
-        } else {
-            None
-        };
-
-        // Collect all matching file paths from all root directories, sorted for consistent pagination
-        let mut all_matching_files: Vec<_> = self
-            .config
-            .root_directories
-            .iter()
-            .flat_map(|root_dir| {
-                WalkDir::new(root_dir)
-                    .into_iter()
-                    .filter_map(|e| e.ok())
-                    .filter(|entry| {
-                        let path = entry.path();
-                        if !path.is_file() || !globset.is_match(path) {
-                            return false;
-                        }
-                        // Check file size
-                        if let Ok(metadata) = entry.metadata() {
-                            if metadata.len() > max_file_size {
-                                tracing::event!(
-                                    tracing::Level::WARN,
-                                    file_path = ?entry.path(),
-                                    file_size_mb = metadata.len() / (1024 * 1024),
-                                    "Skipping large file"
-                                );
-                                return false;
-                            }
-                        }
-                        true
-                    })
-                    .map(|entry| entry.path().to_path_buf())
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-
-        all_matching_files.sort();
-        let total_files_found = all_matching_files.len();
-
-        // Apply cursor-based filtering
-        let files_to_process: Vec<_> = if let Some(cursor_path) = cursor_path {
-            all_matching_files
-                .into_iter()
-                .skip_while(|path| path.to_string_lossy().as_ref() <= cursor_path.as_str())
-                .collect()
-        } else {
-            all_matching_files.into_iter().collect()
-        };
-
-        // Process files in parallel
-        let pattern_str = param.pattern.clone();
-        let replacement_str = param.replacement.clone();
-        let dry_run = param.dry_run;
-        let pattern = self.get_or_create_pattern(&pattern_str, lang)?;
-        let file_results_raw: Vec<(PathBuf, FileDiffResult)> =
-            stream::iter(files_to_process.iter().cloned())
-                .map(|path| {
-                    let replacement_str = replacement_str.clone();
-                    let pattern = pattern.clone();
-                    async move {
-                        let file_content = match tokio::fs::read_to_string(&path).await {
-                            Ok(content) => content,
-                            Err(e) => return (path, Err(ServiceError::Io(e))),
-                        };
-                        let original_lines: Vec<&str> = file_content.lines().collect();
-
-                        let mut ast = AstGrep::new(file_content.as_str(), lang);
-                        let replacement = replacement_str.as_str();
-
-                        let mut changed = true;
-                        let mut iterations = 0;
-                        while changed && iterations < 100 {
-                            changed = false;
-                            if let Some(_node) = ast.root().find(pattern.clone()) {
-                                if ast.replace(pattern.clone(), replacement).is_ok() {
-                                    changed = true;
-                                }
-                            }
-                            iterations += 1;
-                        }
-
-                        let rewritten_content = ast.root().text().to_string();
-
-                        if rewritten_content == file_content {
-                            return (path, Ok(None));
-                        }
-
-                        let new_lines: Vec<&str> = rewritten_content.lines().collect();
-                        let mut changes = Vec::new();
-
-                        let max_len = original_lines.len().max(new_lines.len());
-                        for i in 0..max_len {
-                            let old_line = original_lines.get(i).unwrap_or(&"");
-                            let new_line = new_lines.get(i).unwrap_or(&"");
-
-                            if old_line != new_line {
-                                changes.push(FileDiffChange {
-                                    line_number: i + 1,
-                                    old_content: old_line.to_string(),
-                                    new_content: new_line.to_string(),
-                                });
-                            }
-                        }
-
-                        if !dry_run && !changes.is_empty() {
-                            if let Err(e) = tokio::fs::write(&path, rewritten_content).await {
-                                return (path, Err(ServiceError::Io(e)));
-                            }
-                        }
-
-                        let file_metadata = match tokio::fs::metadata(&path).await {
-                            Ok(metadata) => metadata,
-                            Err(e) => return (path, Err(ServiceError::Io(e))),
-                        };
-
-                        let total_changes = changes.len();
-                        (
-                            path.clone(),
-                            Ok(Some(FileDiffResult {
-                                file_path: path.to_string_lossy().to_string(),
-                                file_size_bytes: file_metadata.len(),
-                                changes: changes
-                                    .into_iter()
-                                    .map(|c| ChangeResult {
-                                        start_line: c.line_number,
-                                        end_line: c.line_number,
-                                        start_col: 0,
-                                        end_col: 0,
-                                        old_text: c.old_content,
-                                        new_text: c.new_content,
-                                    })
-                                    .collect(),
-                                total_changes,
-                                file_hash: Self::calculate_file_hash(&file_content),
-                            })),
-                        )
-                    }
-                })
-                .buffer_unordered(self.config.max_concurrency)
-                .filter_map(|(path, result)| async move {
-                    match result {
-                        Ok(Some(file_result)) => Some((path, file_result)),
-                        Ok(None) => None,
-                        Err(e) => {
-                            tracing::event!(
-                                tracing::Level::WARN,
-                                file_path = ?path,
-                                error = %e,
-                                "Error processing file"
-                            );
-                            None
-                        }
-                    }
-                })
-                .collect::<Vec<_>>()
-                .await;
-
-        let next_cursor = if files_to_process.len() < max_results {
-            Some(CursorResult {
-                last_file_path: String::new(),
-                is_complete: true,
-            })
-        } else if let Some((last_path, _)) = file_results_raw.last() {
-            Some(CursorResult {
-                last_file_path: last_path.to_string_lossy().to_string(),
-                is_complete: false,
-            })
-        } else if let Some(last_processed) = files_to_process.last() {
-            Some(CursorResult {
-                last_file_path: last_processed.to_string_lossy().to_string(),
-                is_complete: false,
-            })
-        } else {
-            Some(CursorResult {
-                last_file_path: String::new(),
-                is_complete: true,
-            })
-        };
-
-        let file_results: Vec<FileDiffResult> = file_results_raw
-            .into_iter()
-            .map(|(_, result)| result)
-            .collect();
-
-        // Calculate totals
-        let total_changes: usize = file_results.iter().map(|r| r.total_changes).sum();
-        let files_with_changes: Vec<(String, usize)> = file_results
-            .iter()
-            .map(|r| (r.file_path.clone(), r.total_changes))
-            .collect();
-
-        tracing::Span::current().record("total_changes", total_changes);
-        tracing::Span::current().record("files_modified", files_with_changes.len());
-
-        if param.summary_only {
-            // Convert to summary results
-            let summary_results: Vec<FileSummaryResult> = file_results
-                .into_iter()
-                .map(|diff_result| {
-                    let sample_changes = if param.include_samples {
-                        diff_result
-                            .changes
-                            .into_iter()
-                            .take(param.max_samples)
-                            .collect()
-                    } else {
-                        vec![]
-                    };
-
-                    FileSummaryResult {
-                        file_path: diff_result.file_path,
-                        file_size_bytes: diff_result.file_size_bytes,
-                        total_changes: diff_result.total_changes,
-                        lines_changed: diff_result.total_changes, // For now, assume 1:1 mapping
-                        file_hash: diff_result.file_hash,
-                        sample_changes,
-                    }
-                })
-                .collect();
-
-            Ok(FileReplaceResult {
-                file_results: vec![],
-                summary_results,
-                next_cursor,
-                total_files_found,
-                dry_run: param.dry_run,
-                total_changes,
-                files_with_changes: files_with_changes.len(),
-            })
-        } else {
-            Ok(FileReplaceResult {
-                file_results,
-                summary_results: vec![],
-                next_cursor,
-                total_files_found,
-                dry_run: param.dry_run,
-                total_changes,
-                files_with_changes: files_with_changes.len(),
-            })
-        }
+        let result = self.replace_service.file_replace(param).await?;
+        tracing::Span::current().record("total_files_found", result.total_files_found);
+        tracing::Span::current().record("files_with_changes", result.files_with_changes);
+        tracing::Span::current().record("total_changes", result.total_changes);
+        Ok(result)
     }
 
-    #[tracing::instrument(skip(self))]
     pub async fn list_languages(
         &self,
         _param: ListLanguagesParam,
@@ -1758,65 +1472,16 @@ Always check the response for error conditions before processing results.
         Ok(result)
     }
 
-
     #[tracing::instrument(skip(self), fields(rule_id))]
     pub async fn rule_replace(
         &self,
         param: RuleReplaceParam,
     ) -> Result<FileReplaceResult, ServiceError> {
-        // Parse the rule configuration
-        let config = self.parse_rule_config(&param.rule_config)?;
-        self.validate_rule_config(&config)?;
-
-        tracing::Span::current().record("rule_id", &config.id);
-
-        // Extract the fix/replacement from the rule config
-        let replacement = config.fix.as_ref().ok_or_else(|| {
-            ServiceError::ParserError(
-                "Rule configuration must include 'fix' field for replacement".into(),
-            )
-        })?;
-
-        // For now, only handle simple pattern rules
-        if !self.is_simple_pattern_rule(&config.rule) {
-            return Err(ServiceError::ParserError(
-                "Only simple pattern rules are currently supported for replacement".into(),
-            ));
-        }
-
-        let pattern_str = self
-            .extract_pattern_from_rule(&config.rule)
-            .ok_or_else(|| ServiceError::ParserError("Pattern rule missing pattern".into()))?;
-
-        let path_pattern = param.path_pattern.unwrap_or_else(|| "**/*".into());
-
-        // Create equivalent FileReplaceParam
-        let file_replace_param = FileReplaceParam {
-            path_pattern,
-            pattern: pattern_str,
-            replacement: replacement.clone(),
-            language: config.language.clone(),
-            max_results: param.max_results,
-            max_file_size: param.max_file_size,
-            dry_run: param.dry_run,
-            summary_only: param.summary_only,
-            include_samples: false,
-            max_samples: 3,
-            cursor: param.cursor,
-        };
-
-        // Use existing file_replace functionality
-        let replace_result = self.file_replace(file_replace_param).await?;
-
-        Ok(FileReplaceResult {
-            file_results: replace_result.file_results,
-            summary_results: replace_result.summary_results,
-            next_cursor: replace_result.next_cursor,
-            total_files_found: replace_result.total_files_found,
-            dry_run: replace_result.dry_run,
-            total_changes: replace_result.total_changes,
-            files_with_changes: replace_result.files_with_changes,
-        })
+        let result = self.replace_service.rule_replace(param).await?;
+        tracing::Span::current().record("total_files_found", result.total_files_found);
+        tracing::Span::current().record("files_with_changes", result.files_with_changes);
+        tracing::Span::current().record("total_changes", result.total_changes);
+        Ok(result)
     }
 
     fn ensure_rules_directory(&self) -> Result<(), ServiceError> {
