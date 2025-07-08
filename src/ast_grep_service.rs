@@ -1492,9 +1492,7 @@ Always check the response for error conditions before processing results.
     }
 
     fn get_rule_file_path(&self, rule_id: &str) -> PathBuf {
-        self.config
-            .rules_directory
-            .join(format!("{rule_id}.yaml"))
+        self.config.rules_directory.join(format!("{rule_id}.yaml"))
     }
 
     #[tracing::instrument(skip(self), fields(rule_id))]

@@ -82,7 +82,7 @@ impl ReplaceService {
                 });
             }
         }
-        
+
         let lang = Language::from_str(&param.language)
             .map_err(|_| ServiceError::Internal("Failed to parse language".to_string()))?;
 
@@ -95,7 +95,9 @@ impl ReplaceService {
             .map_err(|e| ServiceError::Internal(format!("Failed to build glob set: {e}")))?;
 
         // Collect all potential files first
-        let all_files: Vec<(String, PathBuf, u64)> = self.config.root_directories
+        let all_files: Vec<(String, PathBuf, u64)> = self
+            .config
+            .root_directories
             .iter()
             .flat_map(|root_dir| {
                 WalkDir::new(root_dir)
@@ -106,14 +108,15 @@ impl ReplaceService {
                     .filter_map(|entry| {
                         let path = entry.path();
                         let path_str = path.to_string_lossy().to_string();
-                        
+
                         // Check if matches glob pattern
                         if !glob_set.is_match(&path_str) {
                             return None;
                         }
-                        
+
                         // Check file size
-                        entry.metadata()
+                        entry
+                            .metadata()
                             .ok()
                             .filter(|m| m.len() <= param.max_file_size)
                             .map(|m| (path_str, path.to_path_buf(), m.len()))
@@ -127,14 +130,15 @@ impl ReplaceService {
 
         // Apply cursor filtering
         let cursor_filter = param.cursor.as_ref().map(|c| c.last_file_path.clone());
-        
+
         // Process files and collect results
         let mut file_results = Vec::new();
         let mut total_files_found = 0;
         let mut total_changes = 0;
         let mut files_with_changes = 0;
-        
-        for (path_str, path_buf, file_size) in sorted_files.into_iter()
+
+        for (path_str, path_buf, file_size) in sorted_files
+            .into_iter()
             .filter(|(path, _, _)| cursor_filter.as_ref().map_or(true, |start| path > start))
         {
             // Read file content
@@ -151,12 +155,9 @@ impl ReplaceService {
 
             // Apply replacements
             total_files_found += 1;
-            let new_content = self.pattern_matcher.replace(
-                &content,
-                &param.pattern,
-                &param.replacement,
-                lang,
-            )?;
+            let new_content =
+                self.pattern_matcher
+                    .replace(&content, &param.pattern, &param.replacement, lang)?;
             let file_hash = format!("{:x}", Sha256::digest(content.as_bytes()));
 
             // Convert matches to changes
@@ -243,7 +244,7 @@ impl ReplaceService {
                 });
             }
         }
-        
+
         let rule = parse_rule_config(&param.rule_config)?;
 
         if rule.fix.is_none() {
