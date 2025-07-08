@@ -21,6 +21,21 @@ impl From<RuleDeserializer> for Rule {
                 Rule::Pattern(PatternRule::Simple { pattern })
             }
             RuleDeserializer::Object(mut map) => {
+                // First check for relational rules before processing pattern
+                let has_pattern = map.contains_key("pattern");
+                let has_inside = map.contains_key("inside");
+                let has_has = map.contains_key("has");
+                let has_follows = map.contains_key("follows");
+                let has_precedes = map.contains_key("precedes");
+
+                if has_pattern && (has_inside || has_has || has_follows || has_precedes) {
+                    // This is a relational rule with a base pattern
+                    // For now, return a placeholder - proper implementation would parse both parts
+                    return Rule::Pattern(PatternRule::Simple {
+                        pattern: "RELATIONAL_PLACEHOLDER".to_string(),
+                    });
+                }
+
                 // Check for pattern field
                 if let Some(pattern_val) = map.remove("pattern") {
                     match pattern_val {
@@ -87,28 +102,6 @@ impl From<RuleDeserializer> for Rule {
                     if let Ok(rule) = serde_json::from_value::<RuleDeserializer>(not_val) {
                         return Rule::Not(Box::new(Rule::from(rule)));
                     }
-                }
-
-                // For relational rules, we need to handle them specially
-                // The YAML structure is typically:
-                // rule:
-                //   pattern: something
-                //   inside:
-                //     pattern: container
-
-                // Check if this is a rule with relational conditions
-                let has_pattern = map.contains_key("pattern");
-                let has_inside = map.contains_key("inside");
-                let has_has = map.contains_key("has");
-                let has_follows = map.contains_key("follows");
-                let has_precedes = map.contains_key("precedes");
-
-                if has_pattern && (has_inside || has_has || has_follows || has_precedes) {
-                    // This is a relational rule with a base pattern
-                    // For now, return a placeholder - proper implementation would parse both parts
-                    return Rule::Pattern(PatternRule::Simple {
-                        pattern: "RELATIONAL_PLACEHOLDER".to_string(),
-                    });
                 }
 
                 // Default to empty All rule

@@ -247,6 +247,7 @@ pub struct GenerateAstResult {
     pub ast: String,
     pub language: String,
     pub code_length: usize,
+    pub node_kinds: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

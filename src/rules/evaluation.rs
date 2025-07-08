@@ -149,17 +149,40 @@ impl RuleEvaluator {
             return Ok(vec![]);
         }
 
-        // Start with matches from the first rule
-        let mut intersection_matches =
-            self.evaluate_rule_against_code(&all_rules[0], code, lang)?;
+        // For All rules, we need to find nodes that satisfy ALL conditions
+        // This means finding nodes that match the primary rule and also contain/satisfy other rules
 
-        // For each subsequent rule, find intersection with current matches
-        for rule in &all_rules[1..] {
-            let rule_matches = self.evaluate_rule_against_code(rule, code, lang)?;
-            intersection_matches = self.intersect_matches(intersection_matches, rule_matches);
+        // Start with matches from the first rule as potential candidates
+        let primary_matches = self.evaluate_rule_against_code(&all_rules[0], code, lang)?;
+
+        // Filter candidates that also satisfy all other rules
+        let mut result_matches = Vec::new();
+
+        for primary_match in primary_matches {
+            let mut satisfies_all = true;
+
+            // Check if this match satisfies all other rules
+            for rule in &all_rules[1..] {
+                let rule_matches = self.evaluate_rule_against_code(rule, code, lang)?;
+
+                // Check if any rule match is contained within or overlaps with the primary match
+                let satisfies_rule = rule_matches.iter().any(|rule_match| {
+                    self.is_match_contained_in(&primary_match, rule_match)
+                        || self.matches_overlap(&primary_match, rule_match)
+                });
+
+                if !satisfies_rule {
+                    satisfies_all = false;
+                    break;
+                }
+            }
+
+            if satisfies_all {
+                result_matches.push(primary_match);
+            }
         }
 
-        Ok(intersection_matches)
+        Ok(result_matches)
     }
 
     fn evaluate_any_rule(
@@ -205,13 +228,19 @@ impl RuleEvaluator {
         let not_matches = self.evaluate_rule_against_code(not_rule, code, lang)?;
 
         // Return nodes that don't match the NOT rule
+        // We exclude both exact matches and nodes that overlap with NOT match text
         let filtered_matches: Vec<MatchResult> = all_nodes
             .into_iter()
             .filter(|node| {
                 !not_matches.iter().any(|not_match| {
-                    node.start_line == not_match.start_line
+                    // Exact match (same position and text)
+                    (node.start_line == not_match.start_line
                         && node.start_col == not_match.start_col
-                        && node.text == not_match.text
+                        && node.text == not_match.text)
+                    // Or NOT match contains the node text (node is a substring of what we want to exclude)
+                    || not_match.text.contains(&node.text)
+                    // Or node contains the NOT match text (node is a parent of what we want to exclude)
+                    || node.text.contains(&not_match.text)
                 })
             })
             .collect();
@@ -225,37 +254,23 @@ impl RuleEvaluator {
         code: &str,
         lang: Language,
     ) -> Result<Vec<MatchResult>, ServiceError> {
-        // Create a pattern that matches any node of the specified kind
-        // This is a simplified implementation
-        let kind_pattern = format!("{kind}()");
         let ast = AstGrep::new(code, lang);
 
-        // Try to create a pattern for the kind
-        match self.get_or_create_pattern(&kind_pattern, lang) {
+        // Use a catch-all pattern to find all nodes, then filter by kind
+        let catch_all_pattern = "$_";
+        match self.get_or_create_pattern(catch_all_pattern, lang) {
             Ok(pattern) => {
-                let matches: Vec<MatchResult> = ast
+                let all_matches: Vec<MatchResult> = ast
                     .root()
                     .find_all(pattern)
-                    .map(|node| {
-                        let vars: HashMap<String, String> = node.get_env().clone().into();
-                        let start_pos = node.get_node().start_pos();
-                        let end_pos = node.get_node().end_pos();
-
-                        MatchResult {
-                            text: node.text().to_string(),
-                            start_line: start_pos.line(),
-                            end_line: end_pos.line(),
-                            start_col: start_pos.column(&node),
-                            end_col: end_pos.column(&node),
-                            vars,
-                        }
-                    })
+                    .filter(|node| node.get_node().kind() == kind)
+                    .map(|node| MatchResult::from_node_match(&node))
                     .collect();
 
-                Ok(matches)
+                Ok(all_matches)
             }
             Err(_) => {
-                // Fallback: use a more generic approach
+                // If that fails, return empty results
                 Ok(vec![])
             }
         }
@@ -314,6 +329,7 @@ impl RuleEvaluator {
         Ok(pattern)
     }
 
+    #[allow(dead_code)]
     fn intersect_matches(
         &self,
         matches1: Vec<MatchResult>,
@@ -330,6 +346,34 @@ impl RuleEvaluator {
                 })
             })
             .collect()
+    }
+
+    fn is_match_contained_in(&self, container: &MatchResult, contained: &MatchResult) -> bool {
+        // Check if 'contained' is within the bounds of 'container'
+        if container.start_line < contained.start_line && contained.end_line <= container.end_line {
+            return true;
+        }
+        if container.start_line == contained.start_line && contained.end_line <= container.end_line
+        {
+            return container.start_col <= contained.start_col;
+        }
+        if container.start_line < contained.start_line && contained.end_line == container.end_line {
+            return contained.end_col <= container.end_col;
+        }
+        if container.start_line == contained.start_line && contained.end_line == container.end_line
+        {
+            return container.start_col <= contained.start_col
+                && contained.end_col <= container.end_col;
+        }
+        false
+    }
+
+    fn matches_overlap(&self, match1: &MatchResult, match2: &MatchResult) -> bool {
+        // Check if two matches overlap in any way
+        !(match1.end_line < match2.start_line
+            || match2.end_line < match1.start_line
+            || (match1.end_line == match2.start_line && match1.end_col < match2.start_col)
+            || (match2.end_line == match1.start_line && match2.end_col < match1.start_col))
     }
 
     fn evaluate_inside_rule(
@@ -413,16 +457,40 @@ impl RuleEvaluator {
             return Ok(vec![]);
         }
 
-        // Start with matches from the first rule
-        let mut intersection_matches = self.evaluate_rule(&all_rules[0], code, lang)?;
+        // For All rules, we need to find nodes that satisfy ALL conditions
+        // This means finding nodes that match the primary rule and also contain/satisfy other rules
 
-        // For each subsequent rule, find intersection with current matches
-        for rule in &all_rules[1..] {
-            let rule_matches = self.evaluate_rule(rule, code, lang)?;
-            intersection_matches = self.intersect_matches(intersection_matches, rule_matches);
+        // Start with matches from the first rule as potential candidates
+        let primary_matches = self.evaluate_rule(&all_rules[0], code, lang)?;
+
+        // Filter candidates that also satisfy all other rules
+        let mut result_matches = Vec::new();
+
+        for primary_match in primary_matches {
+            let mut satisfies_all = true;
+
+            // Check if this match satisfies all other rules
+            for rule in &all_rules[1..] {
+                let rule_matches = self.evaluate_rule(rule, code, lang)?;
+
+                // Check if any rule match is contained within or overlaps with the primary match
+                let satisfies_rule = rule_matches.iter().any(|rule_match| {
+                    self.is_match_contained_in(&primary_match, rule_match)
+                        || self.matches_overlap(&primary_match, rule_match)
+                });
+
+                if !satisfies_rule {
+                    satisfies_all = false;
+                    break;
+                }
+            }
+
+            if satisfies_all {
+                result_matches.push(primary_match);
+            }
         }
 
-        Ok(intersection_matches)
+        Ok(result_matches)
     }
 
     fn evaluate_any_rule_enum(
@@ -467,13 +535,19 @@ impl RuleEvaluator {
         let not_matches = self.evaluate_rule(not_rule, code, lang)?;
 
         // Return nodes that don't match the NOT rule
+        // We exclude both exact matches and nodes that overlap with NOT match text
         let filtered_matches: Vec<MatchResult> = all_nodes
             .into_iter()
             .filter(|node| {
                 !not_matches.iter().any(|not_match| {
-                    node.start_line == not_match.start_line
+                    // Exact match (same position and text)
+                    (node.start_line == not_match.start_line
                         && node.start_col == not_match.start_col
-                        && node.text == not_match.text
+                        && node.text == not_match.text)
+                    // Or NOT match contains the node text (node is a substring of what we want to exclude)
+                    || not_match.text.contains(&node.text)
+                    // Or node contains the NOT match text (node is a parent of what we want to exclude)
+                    || node.text.contains(&not_match.text)
                 })
             })
             .collect();
@@ -552,10 +626,8 @@ impl RuleEvaluator {
             .filter(|main_match| {
                 // Check if any contained match is within this main match's range
                 contained_matches.iter().any(|contained| {
-                    contained.start_line >= main_match.start_line
-                        && contained.end_line <= main_match.end_line
-                        && contained.start_col >= main_match.start_col
-                        && contained.end_col <= main_match.end_col
+                    self.is_match_contained_in(main_match, contained)
+                        || self.matches_overlap(main_match, contained)
                 })
             })
             .collect();
@@ -695,6 +767,7 @@ function test() {
 "#;
         let lang = Language::JavaScript;
 
+        // Test All rule with Tree-sitter kind and pattern
         let rule = Rule::All(vec![
             Rule::Kind("function_declaration".to_string()),
             Rule::Pattern(PatternRule::Simple {
