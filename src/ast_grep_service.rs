@@ -8,11 +8,12 @@ use crate::rules::{CatalogManager, RuleEvaluator, RuleService, RuleStorage};
 use crate::search::SearchService;
 use crate::types::*;
 
+use ast_grep_core::{AstGrep, Pattern};
+
 use lru::LruCache;
 use std::num::NonZeroUsize;
 use std::{borrow::Cow, fs, path::PathBuf, str::FromStr, sync::Arc, sync::Mutex};
 
-use ast_grep_core::Pattern;
 use ast_grep_language::SupportLang as Language;
 // Removed unused base64 import
 use rmcp::{
@@ -52,6 +53,24 @@ impl AstGrepService {
     fn parse_language(&self, lang_str: &str) -> Result<Language, ServiceError> {
         Language::from_str(lang_str)
             .map_err(|_| ServiceError::Internal("Failed to parse language".into()))
+    }
+
+    /// Extract unique Tree-sitter node kinds from the given code
+    /// This is useful for users to discover what node kinds are available for use in Kind rules
+    fn extract_node_kinds(&self, code: &str, lang: Language) -> Result<Vec<String>, ServiceError> {
+        let ast = AstGrep::new(code, lang);
+
+        // Use a catch-all pattern to find all nodes
+        let pattern = Pattern::new("$_", lang);
+
+        let mut unique_kinds = std::collections::HashSet::new();
+        for node_match in ast.root().find_all(pattern) {
+            unique_kinds.insert(node_match.get_node().kind().to_string());
+        }
+
+        let mut kinds: Vec<String> = unique_kinds.into_iter().collect();
+        kinds.sort();
+        Ok(kinds)
     }
 
     pub fn new() -> Self {
@@ -147,10 +166,14 @@ impl AstGrepService {
         let ast_parser = AstParser::new();
         let ast_string = ast_parser.generate_ast_debug_string(&param.code, lang);
 
+        // Extract unique node kinds from the AST
+        let node_kinds = self.extract_node_kinds(&param.code, lang)?;
+
         Ok(GenerateAstResult {
             ast: ast_string,
             language: param.language,
             code_length: param.code.chars().count(),
+            node_kinds,
         })
     }
 
