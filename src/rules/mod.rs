@@ -1,4 +1,5 @@
 pub mod ast;
+pub mod ast_serde;
 pub mod catalog;
 pub mod evaluation;
 pub mod parser;
