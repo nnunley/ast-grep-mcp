@@ -76,7 +76,7 @@ rule:
 
 #[tokio::test]
 async fn test_rule_search_basic() {
-    use ast_grep_mcp::ast_grep_service::ServiceConfig;
+    use ast_grep_mcp::config::ServiceConfig;
 
     let temp_dir = TempDir::new().unwrap();
 
@@ -121,7 +121,7 @@ rule:
 
 #[tokio::test]
 async fn test_rule_search_composite_all() {
-    use ast_grep_mcp::ast_grep_service::ServiceConfig;
+    use ast_grep_mcp::config::ServiceConfig;
 
     let temp_dir = TempDir::new().unwrap();
 

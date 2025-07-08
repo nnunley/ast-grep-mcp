@@ -1,5 +1,5 @@
-use std::fmt;
 use rmcp::model::ErrorData;
+use std::fmt;
 use std::path::PathBuf;
 
 #[derive(Debug)]
@@ -12,6 +12,8 @@ pub enum ServiceError {
     SerdeJson(serde_json::Error),
     Regex(regex::Error),
     FileNotFound(PathBuf),
+    Glob(globset::Error),
+    ToolNotFound(String),
 }
 
 impl fmt::Display for ServiceError {
@@ -25,6 +27,8 @@ impl fmt::Display for ServiceError {
             ServiceError::SerdeJson(err) => write!(f, "JSON parsing error: {}", err),
             ServiceError::Regex(err) => write!(f, "Regex error: {}", err),
             ServiceError::FileNotFound(path) => write!(f, "File not found: {}", path.display()),
+            ServiceError::Glob(err) => write!(f, "Glob error: {}", err),
+            ServiceError::ToolNotFound(tool) => write!(f, "Tool not found: {}", tool),
         }
     }
 }
@@ -61,8 +65,14 @@ impl From<regex::Error> for ServiceError {
     }
 }
 
+impl From<globset::Error> for ServiceError {
+    fn from(err: globset::Error) -> Self {
+        ServiceError::Glob(err)
+    }
+}
+
 impl From<ServiceError> for ErrorData {
     fn from(err: ServiceError) -> Self {
-        ErrorData::internal_error(err.to_string().into(), None)
+        ErrorData::internal_error(err.to_string(), None)
     }
 }

@@ -1,6 +1,8 @@
-use crate::types::*;
 use crate::rules::{RuleValidateParam, validate_rule};
-use rmcp::model::{CallToolRequestParam, CallToolResult, Content, ErrorData, ListToolsResult, Tool};
+use crate::types::*;
+use rmcp::model::{
+    CallToolRequestParam, CallToolResult, Content, ErrorData, ListToolsResult, Tool,
+};
 use serde_json;
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -14,13 +16,13 @@ impl ToolService {
                 Tool {
                     name: "search".into(),
                     description: "Search for patterns in code using ast-grep.".into(),
-                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({ 
-                        "type": "object", 
-                        "properties": { 
-                            "code": { "type": "string" }, 
-                            "pattern": { "type": "string" }, 
-                            "language": { "type": "string" } 
-                        } 
+                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "code": { "type": "string" },
+                            "pattern": { "type": "string" },
+                            "language": { "type": "string" }
+                        }
                     })).unwrap()),
                 },
                 Tool {
@@ -49,14 +51,14 @@ impl ToolService {
                 Tool {
                     name: "replace".into(),
                     description: "Replace patterns in code.".into(),
-                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({ 
-                        "type": "object", 
-                        "properties": { 
-                            "code": { "type": "string" }, 
-                            "pattern": { "type": "string" }, 
-                            "replacement": { "type": "string" }, 
-                            "language": { "type": "string" } 
-                        } 
+                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "code": { "type": "string" },
+                            "pattern": { "type": "string" },
+                            "replacement": { "type": "string" },
+                            "language": { "type": "string" }
+                        }
                     })).unwrap()),
                 },
                 Tool {
@@ -247,7 +249,9 @@ impl ToolService {
         Ok(CallToolResult::success(vec![Content::json(json_value)?]))
     }
 
-    pub async fn handle_validate_rule(param: RuleValidateParam) -> Result<CallToolResult, ErrorData> {
+    pub async fn handle_validate_rule(
+        param: RuleValidateParam,
+    ) -> Result<CallToolResult, ErrorData> {
         let result = validate_rule(param).await.map_err(ErrorData::from)?;
         Self::create_success_result(&result)
     }
@@ -311,7 +315,7 @@ Search for patterns in code strings
 }
 ```
 
-### file_search  
+### file_search
 Search for patterns across files using glob patterns
 ```json
 {
@@ -368,7 +372,7 @@ fix: let $VAR = $VALUE;
 ### Composite Rules
 Combine multiple conditions with logical operators:
 - `all`: Match nodes that satisfy ALL conditions
-- `any`: Match nodes that satisfy ANY condition  
+- `any`: Match nodes that satisfy ANY condition
 - `not`: Match nodes that DON'T satisfy the condition
 
 ```yaml
@@ -416,7 +420,7 @@ Import rules from the online catalog
 ## Pattern Examples
 
 **Variable captures:** `$VAR`, `$NAME`, `$ARGS`
-**Multi-statement:** `$$$STATEMENTS` 
+**Multi-statement:** `$$$STATEMENTS`
 **Optional elements:** Use composite rules with `any`
 **Complex matching:** Combine `pattern`, `kind`, `regex` in rules
 

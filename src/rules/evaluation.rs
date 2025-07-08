@@ -1,6 +1,6 @@
+use super::types::{PatternSpec, RuleObject};
 use crate::errors::ServiceError;
 use crate::types::MatchResult;
-use super::types::{RuleObject, PatternSpec};
 use ast_grep_core::{AstGrep, Pattern};
 use ast_grep_language::SupportLang as Language;
 use regex::Regex;
@@ -12,12 +12,25 @@ pub struct RuleEvaluator {
     pattern_cache: Arc<Mutex<HashMap<String, Pattern>>>,
 }
 
+impl Default for RuleEvaluator {
+    fn default() -> Self {
+        Self {
+            pattern_cache: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+}
+
 impl RuleEvaluator {
-    pub fn new(pattern_cache: Arc<Mutex<HashMap<String, Pattern>>>) -> Self {
-        Self { pattern_cache }
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    pub fn evaluate_rule_against_code(&self, rule: &RuleObject, code: &str, lang: Language) -> Result<Vec<MatchResult>, ServiceError> {
+    pub fn evaluate_rule_against_code(
+        &self,
+        rule: &RuleObject,
+        code: &str,
+        lang: Language,
+    ) -> Result<Vec<MatchResult>, ServiceError> {
         // Handle different rule types
         if let Some(pattern_spec) = &rule.pattern {
             // Simple pattern rule
@@ -38,11 +51,18 @@ impl RuleEvaluator {
             // Regex rule - match nodes by text content
             self.evaluate_regex_rule(regex, code, lang)
         } else {
-            Err(ServiceError::ParserError("Rule must have at least one condition".into()))
+            Err(ServiceError::ParserError(
+                "Rule must have at least one condition".into(),
+            ))
         }
     }
 
-    fn evaluate_pattern_rule(&self, pattern_spec: &PatternSpec, code: &str, lang: Language) -> Result<Vec<MatchResult>, ServiceError> {
+    fn evaluate_pattern_rule(
+        &self,
+        pattern_spec: &PatternSpec,
+        code: &str,
+        lang: Language,
+    ) -> Result<Vec<MatchResult>, ServiceError> {
         let pattern_str = match pattern_spec {
             PatternSpec::Simple(pattern) => pattern.clone(),
             PatternSpec::Advanced { context, .. } => context.clone(),
@@ -54,33 +74,25 @@ impl RuleEvaluator {
         let matches: Vec<MatchResult> = ast
             .root()
             .find_all(pattern)
-            .map(|node| {
-                let vars: HashMap<String, String> = node.get_env().clone().into();
-                let range = node.range();
-                let start_pos = range.start;
-                let end_pos = range.end;
-
-                MatchResult {
-                    text: node.text().to_string(),
-                    start_line: start_pos.row + 1,
-                    end_line: end_pos.row + 1,
-                    start_col: start_pos.column,
-                    end_col: end_pos.column,
-                    vars,
-                }
-            })
+            .map(|node| MatchResult::from_node_match(&node))
             .collect();
 
         Ok(matches)
     }
 
-    fn evaluate_all_rule(&self, all_rules: &[RuleObject], code: &str, lang: Language) -> Result<Vec<MatchResult>, ServiceError> {
+    fn evaluate_all_rule(
+        &self,
+        all_rules: &[RuleObject],
+        code: &str,
+        lang: Language,
+    ) -> Result<Vec<MatchResult>, ServiceError> {
         if all_rules.is_empty() {
             return Ok(vec![]);
         }
 
         // Start with matches from the first rule
-        let mut intersection_matches = self.evaluate_rule_against_code(&all_rules[0], code, lang)?;
+        let mut intersection_matches =
+            self.evaluate_rule_against_code(&all_rules[0], code, lang)?;
 
         // For each subsequent rule, find intersection with current matches
         for rule in &all_rules[1..] {
@@ -91,7 +103,12 @@ impl RuleEvaluator {
         Ok(intersection_matches)
     }
 
-    fn evaluate_any_rule(&self, any_rules: &[RuleObject], code: &str, lang: Language) -> Result<Vec<MatchResult>, ServiceError> {
+    fn evaluate_any_rule(
+        &self,
+        any_rules: &[RuleObject],
+        code: &str,
+        lang: Language,
+    ) -> Result<Vec<MatchResult>, ServiceError> {
         let mut all_matches = Vec::new();
 
         // Collect matches from all rules
@@ -107,7 +124,12 @@ impl RuleEvaluator {
         Ok(all_matches)
     }
 
-    fn evaluate_not_rule(&self, not_rule: &RuleObject, code: &str, lang: Language) -> Result<Vec<MatchResult>, ServiceError> {
+    fn evaluate_not_rule(
+        &self,
+        not_rule: &RuleObject,
+        code: &str,
+        lang: Language,
+    ) -> Result<Vec<MatchResult>, ServiceError> {
         // Get all potential nodes by using a catch-all pattern or kind
         // For simplicity, we'll look for any identifier or statement
         let catch_all_pattern = "$_";
@@ -117,21 +139,7 @@ impl RuleEvaluator {
         let all_nodes: Vec<MatchResult> = ast
             .root()
             .find_all(pattern)
-            .map(|node| {
-                let vars: HashMap<String, String> = node.get_env().clone().into();
-                let range = node.range();
-                let start_pos = range.start;
-                let end_pos = range.end;
-
-                MatchResult {
-                    text: node.text().to_string(),
-                    start_line: start_pos.row + 1,
-                    end_line: end_pos.row + 1,
-                    start_col: start_pos.column,
-                    end_col: end_pos.column,
-                    vars,
-                }
-            })
+            .map(|node| MatchResult::from_node_match(&node))
             .collect();
 
         // Get matches from the NOT rule
@@ -142,9 +150,9 @@ impl RuleEvaluator {
             .into_iter()
             .filter(|node| {
                 !not_matches.iter().any(|not_match| {
-                    node.start_line == not_match.start_line && 
-                    node.start_col == not_match.start_col &&
-                    node.text == not_match.text
+                    node.start_line == not_match.start_line
+                        && node.start_col == not_match.start_col
+                        && node.text == not_match.text
                 })
             })
             .collect();
@@ -152,12 +160,17 @@ impl RuleEvaluator {
         Ok(filtered_matches)
     }
 
-    fn evaluate_kind_rule(&self, kind: &str, code: &str, lang: Language) -> Result<Vec<MatchResult>, ServiceError> {
+    fn evaluate_kind_rule(
+        &self,
+        kind: &str,
+        code: &str,
+        lang: Language,
+    ) -> Result<Vec<MatchResult>, ServiceError> {
         // Create a pattern that matches any node of the specified kind
         // This is a simplified implementation
         let kind_pattern = format!("{}()", kind);
         let ast = AstGrep::new(code, lang);
-        
+
         // Try to create a pattern for the kind
         match self.get_or_create_pattern(&kind_pattern, lang) {
             Ok(pattern) => {
@@ -166,16 +179,15 @@ impl RuleEvaluator {
                     .find_all(pattern)
                     .map(|node| {
                         let vars: HashMap<String, String> = node.get_env().clone().into();
-                        let range = node.range();
-                        let start_pos = range.start;
-                        let end_pos = range.end;
+                        let start_pos = node.get_node().start_pos();
+                        let end_pos = node.get_node().end_pos();
 
                         MatchResult {
                             text: node.text().to_string(),
-                            start_line: start_pos.row + 1,
-                            end_line: end_pos.row + 1,
-                            start_col: start_pos.column,
-                            end_col: end_pos.column,
+                            start_line: start_pos.line(),
+                            end_line: end_pos.line(),
+                            start_col: start_pos.column(&node),
+                            end_col: end_pos.column(&node),
                             vars,
                         }
                     })
@@ -190,7 +202,12 @@ impl RuleEvaluator {
         }
     }
 
-    fn evaluate_regex_rule(&self, regex_pattern: &str, code: &str, _lang: Language) -> Result<Vec<MatchResult>, ServiceError> {
+    fn evaluate_regex_rule(
+        &self,
+        regex_pattern: &str,
+        code: &str,
+        _lang: Language,
+    ) -> Result<Vec<MatchResult>, ServiceError> {
         let regex = Regex::new(regex_pattern)?;
         let mut matches = Vec::new();
 
@@ -211,9 +228,13 @@ impl RuleEvaluator {
         Ok(matches)
     }
 
-    fn get_or_create_pattern(&self, pattern_str: &str, lang: Language) -> Result<Pattern, ServiceError> {
-        let cache_key = format!("{}:{}", lang.to_string(), pattern_str);
-        
+    fn get_or_create_pattern(
+        &self,
+        pattern_str: &str,
+        lang: Language,
+    ) -> Result<Pattern, ServiceError> {
+        let cache_key = format!("{}:{}", lang, pattern_str);
+
         // Try to get from cache first
         {
             let cache = self.pattern_cache.lock().unwrap();
@@ -223,8 +244,7 @@ impl RuleEvaluator {
         }
 
         // Create new pattern
-        let pattern = Pattern::new(pattern_str, lang)
-            .map_err(|_| ServiceError::ParserError("Failed to parse pattern".to_string()))?;
+        let pattern = Pattern::new(pattern_str, lang);
 
         // Store in cache
         {
@@ -235,15 +255,19 @@ impl RuleEvaluator {
         Ok(pattern)
     }
 
-    fn intersect_matches(&self, matches1: Vec<MatchResult>, matches2: Vec<MatchResult>) -> Vec<MatchResult> {
+    fn intersect_matches(
+        &self,
+        matches1: Vec<MatchResult>,
+        matches2: Vec<MatchResult>,
+    ) -> Vec<MatchResult> {
         matches1
             .into_iter()
             .filter(|m1| {
                 matches2.iter().any(|m2| {
                     // Check if matches overlap or are the same
-                    m1.start_line == m2.start_line && 
-                    m1.start_col == m2.start_col &&
-                    m1.text == m2.text
+                    m1.start_line == m2.start_line
+                        && m1.start_col == m2.start_col
+                        && m1.text == m2.text
                 })
             })
             .collect()

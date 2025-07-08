@@ -1,8 +1,8 @@
 use crate::config::ServiceConfig;
 use crate::errors::ServiceError;
 use crate::pattern::PatternMatcher;
+use crate::rules::{RuleEvaluator, RuleSearchParam, parse_rule_config};
 use crate::types::*;
-use crate::rules::{parse_rule_config, RuleEvaluator, RuleSearchParam};
 use ast_grep_language::SupportLang as Language;
 // Removed unused imports
 use globset::{Glob, GlobSetBuilder};
@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 use std::str::FromStr;
 use walkdir::WalkDir;
 
+#[derive(Clone)]
 pub struct SearchService {
     config: ServiceConfig,
     pattern_matcher: PatternMatcher,
@@ -17,7 +18,11 @@ pub struct SearchService {
 }
 
 impl SearchService {
-    pub fn new(config: ServiceConfig, pattern_matcher: PatternMatcher, rule_evaluator: RuleEvaluator) -> Self {
+    pub fn new(
+        config: ServiceConfig,
+        pattern_matcher: PatternMatcher,
+        rule_evaluator: RuleEvaluator,
+    ) -> Self {
         Self {
             config,
             pattern_matcher,
@@ -29,12 +34,17 @@ impl SearchService {
         let lang = Language::from_str(&param.language)
             .map_err(|_| ServiceError::Internal("Failed to parse language".to_string()))?;
 
-        let matches = self.pattern_matcher.search(&param.code, &param.pattern, lang)?;
+        let matches = self
+            .pattern_matcher
+            .search(&param.code, &param.pattern, lang)?;
 
         Ok(SearchResult { matches })
     }
 
-    pub async fn file_search(&self, param: FileSearchParam) -> Result<FileSearchResult, ServiceError> {
+    pub async fn file_search(
+        &self,
+        param: FileSearchParam,
+    ) -> Result<FileSearchResult, ServiceError> {
         let lang = Language::from_str(&param.language)
             .map_err(|_| ServiceError::Internal("Failed to parse language".to_string()))?;
 
@@ -65,7 +75,7 @@ impl SearchService {
 
                 // Skip until we reach the cursor position
                 if let Some(ref start_path) = start_after {
-                    if path_str.as_ref() <= start_path {
+                    if path_str.as_ref() <= start_path.as_str() {
                         continue;
                     }
                 }
@@ -82,11 +92,13 @@ impl SearchService {
 
                     // Read and search file
                     if let Ok(content) = std::fs::read_to_string(path) {
-                        let matches = self.pattern_matcher.search(&content, &param.pattern, lang)?;
+                        let matches =
+                            self.pattern_matcher
+                                .search(&content, &param.pattern, lang)?;
 
                         if !matches.is_empty() {
                             let file_hash = format!("{:x}", Sha256::digest(content.as_bytes()));
-                            
+
                             file_results.push(FileMatchResult {
                                 file_path: path_str.to_string(),
                                 file_size_bytes: content.len() as u64,
@@ -95,14 +107,14 @@ impl SearchService {
                             });
 
                             files_processed += 1;
-                            
+
                             // Check if we've reached the limit
                             if files_processed >= param.max_results {
                                 let next_cursor = Some(CursorResult {
                                     last_file_path: path_str.to_string(),
                                     is_complete: false,
                                 });
-                                
+
                                 return Ok(FileSearchResult {
                                     matches: file_results,
                                     next_cursor,
@@ -125,14 +137,17 @@ impl SearchService {
         })
     }
 
-    pub async fn rule_search(&self, param: RuleSearchParam) -> Result<FileSearchResult, ServiceError> {
+    pub async fn rule_search(
+        &self,
+        param: RuleSearchParam,
+    ) -> Result<FileSearchResult, ServiceError> {
         let rule = parse_rule_config(&param.rule_config)?;
         let lang = Language::from_str(&rule.language)
             .map_err(|_| ServiceError::Internal("Failed to parse language".to_string()))?;
 
         // Use path pattern or default to all files
         let path_pattern = param.path_pattern.unwrap_or_else(|| "**/*".to_string());
-        
+
         let glob = Glob::new(&path_pattern)
             .map_err(|e| ServiceError::Internal(format!("Invalid glob pattern: {}", e)))?;
         let mut glob_builder = GlobSetBuilder::new();
@@ -160,7 +175,7 @@ impl SearchService {
 
                 // Skip until we reach the cursor position
                 if let Some(ref start_path) = start_after {
-                    if path_str.as_ref() <= start_path {
+                    if path_str.as_ref() <= start_path.as_str() {
                         continue;
                     }
                 }
@@ -177,11 +192,13 @@ impl SearchService {
 
                     // Read and search file
                     if let Ok(content) = std::fs::read_to_string(path) {
-                        let matches = self.rule_evaluator.evaluate_rule_against_code(&rule.rule, &content, lang)?;
+                        let matches = self
+                            .rule_evaluator
+                            .evaluate_rule_against_code(&rule.rule, &content, lang)?;
 
                         if !matches.is_empty() {
                             let file_hash = format!("{:x}", Sha256::digest(content.as_bytes()));
-                            
+
                             file_results.push(FileMatchResult {
                                 file_path: path_str.to_string(),
                                 file_size_bytes: content.len() as u64,
@@ -190,14 +207,14 @@ impl SearchService {
                             });
 
                             files_processed += 1;
-                            
+
                             // Check if we've reached the limit
                             if files_processed >= param.max_results {
                                 let next_cursor = Some(CursorResult {
                                     last_file_path: path_str.to_string(),
                                     is_complete: false,
                                 });
-                                
+
                                 return Ok(FileSearchResult {
                                     matches: file_results,
                                     next_cursor,
