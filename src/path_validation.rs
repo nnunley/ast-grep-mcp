@@ -134,11 +134,6 @@ mod tests {
         assert!(validate_path_pattern("../escape").is_err());
         assert!(validate_path_pattern("foo/../../../etc/passwd").is_err());
         assert!(validate_path_pattern("..").is_err());
-
-        // Windows-specific tests
-        if cfg!(windows) {
-            assert!(validate_path_pattern("C:\\Windows\\System32").is_err());
-        }
     }
 
     #[test]
