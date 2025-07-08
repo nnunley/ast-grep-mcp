@@ -57,6 +57,19 @@ pub struct FileSearchParam {
     pub cursor: Option<CursorParam>,
 }
 
+impl Default for FileSearchParam {
+    fn default() -> Self {
+        Self {
+            path_pattern: "**/*".to_string(),
+            pattern: String::new(),
+            language: String::new(),
+            max_results: default_max_results(),
+            max_file_size: default_max_file_size(),
+            cursor: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CursorParam {
     pub last_file_path: String,
@@ -127,6 +140,24 @@ pub struct FileReplaceParam {
     #[serde(default = "default_max_samples")]
     pub max_samples: usize,
     pub cursor: Option<CursorParam>,
+}
+
+impl Default for FileReplaceParam {
+    fn default() -> Self {
+        Self {
+            path_pattern: "**/*".to_string(),
+            pattern: String::new(),
+            replacement: String::new(),
+            language: String::new(),
+            max_results: default_max_results_large(),
+            max_file_size: default_max_file_size(),
+            dry_run: default_true(),
+            summary_only: default_false(),
+            include_samples: default_false(),
+            max_samples: default_max_samples(),
+            cursor: None,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
