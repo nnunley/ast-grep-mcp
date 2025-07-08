@@ -1,6 +1,6 @@
 # Example ast-grep rule configuration for replacing console.log with console.debug
 
-id: replace-console-log-with-debug  
+id: replace-console-log-with-debug
 language: javascript
 message: "Replace console.log with console.debug for better log level control"
 severity: info

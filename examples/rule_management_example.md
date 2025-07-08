@@ -39,7 +39,7 @@ Create a rule to detect unsafe TypeScript type assertions:
   "rules": [
     {
       "id": "no-any-assertions",
-      "language": "typescript", 
+      "language": "typescript",
       "message": "Avoid 'as any' assertions - use 'as unknown' instead",
       "severity": "warning",
       "file_path": ".ast-grep-rules/no-any-assertions.yaml",

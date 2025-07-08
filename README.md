@@ -9,7 +9,7 @@ A Model Context Protocol (MCP) service that provides ast-grep functionality for 
 ## ✨ Key Features
 
 - **🔍 Structural Search & Replace** - Use ast-grep's powerful AST-based pattern matching
-- **📁 Multi-Root Directory Support** - Search across multiple directory trees  
+- **📁 Multi-Root Directory Support** - Search across multiple directory trees
 - **⚡ Token-Efficient Diffs** - Returns line-by-line changes instead of full file content
 - **🛡️ Safe by Default** - Dry-run mode with optional in-place file modification
 - **🌍 Multi-Language Support** - JavaScript, TypeScript, Rust, Python, Java, Go, and more
@@ -35,7 +35,7 @@ cargo install --path .
 
 Add to your Claude Desktop configuration file:
 
-**macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`  
+**macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
 **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
 
 ```json
@@ -57,7 +57,7 @@ Configure your client to use `ast-grep-mcp` as a stdio-based MCP server.
 ### `search`
 Search for patterns in code strings (for quick checks).
 
-### `file_search`  
+### `file_search`
 Search for patterns within files using glob patterns.
 ```json
 {
@@ -74,7 +74,7 @@ Replace patterns in code strings (for in-memory transformations).
 🌟 **Token-efficient file replacement with diff output**
 ```json
 {
-  "path_pattern": "src/**/*.js", 
+  "path_pattern": "src/**/*.js",
   "pattern": "const $VAR = $VAL",
   "replacement": "let $VAR = $VAL",
   "language": "javascript",
@@ -113,7 +113,7 @@ Comprehensive usage examples and best practices.
 // Find function declarations
 "function $NAME($PARAMS) { $BODY }"
 
-// Find console.log calls  
+// Find console.log calls
 "console.log($VAR)"
 
 // Find variable assignments
@@ -137,7 +137,7 @@ Comprehensive usage examples and best practices.
 // Find class definitions
 "class $NAME($BASE): $BODY"
 
-// Find function definitions  
+// Find function definitions
 "def $NAME($PARAMS): $BODY"
 ```
 
@@ -149,7 +149,7 @@ Comprehensive usage examples and best practices.
   "tool_code": "file_replace",
   "tool_params": {
     "pattern": "var $VAR = $VAL",
-    "replacement": "const $VAR = $VAL", 
+    "replacement": "const $VAR = $VAL",
     "dry_run": true
   }
 }
@@ -200,17 +200,17 @@ cargo fmt
 
 ## 🌟 Supported Languages
 
-**Web**: JavaScript, TypeScript, TSX, HTML, CSS  
-**Systems**: Rust, C, C++, Go  
-**Enterprise**: Java, C#, Kotlin, Scala  
-**Scripting**: Python, Ruby, Lua, Bash  
+**Web**: JavaScript, TypeScript, TSX, HTML, CSS
+**Systems**: Rust, C, C++, Go
+**Enterprise**: Java, C#, Kotlin, Scala
+**Scripting**: Python, Ruby, Lua, Bash
 **Others**: Swift, Dart, Elixir, Haskell, PHP, YAML, JSON
 
 ## 🤝 Contributing
 
 1. Fork the repository
 2. Create a feature branch
-3. Add tests for new functionality  
+3. Add tests for new functionality
 4. Ensure all tests pass: `cargo test`
 5. Submit a pull request
 
