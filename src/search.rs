@@ -49,12 +49,12 @@ impl SearchService {
             .map_err(|_| ServiceError::Internal("Failed to parse language".to_string()))?;
 
         let glob = Glob::new(&param.path_pattern)
-            .map_err(|e| ServiceError::Internal(format!("Invalid glob pattern: {}", e)))?;
+            .map_err(|e| ServiceError::Internal(format!("Invalid glob pattern: {e}")))?;
         let mut glob_builder = GlobSetBuilder::new();
         glob_builder.add(glob);
         let glob_set = glob_builder
             .build()
-            .map_err(|e| ServiceError::Internal(format!("Failed to build glob set: {}", e)))?;
+            .map_err(|e| ServiceError::Internal(format!("Failed to build glob set: {e}")))?;
 
         let mut file_results = Vec::new();
         let mut total_files_found = 0;
@@ -149,12 +149,12 @@ impl SearchService {
         let path_pattern = param.path_pattern.unwrap_or_else(|| "**/*".to_string());
 
         let glob = Glob::new(&path_pattern)
-            .map_err(|e| ServiceError::Internal(format!("Invalid glob pattern: {}", e)))?;
+            .map_err(|e| ServiceError::Internal(format!("Invalid glob pattern: {e}")))?;
         let mut glob_builder = GlobSetBuilder::new();
         glob_builder.add(glob);
         let glob_set = glob_builder
             .build()
-            .map_err(|e| ServiceError::Internal(format!("Failed to build glob set: {}", e)))?;
+            .map_err(|e| ServiceError::Internal(format!("Failed to build glob set: {e}")))?;
 
         let mut file_results = Vec::new();
         let mut total_files_found = 0;

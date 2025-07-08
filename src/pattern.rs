@@ -85,7 +85,7 @@ impl PatternMatcher {
         pattern_str: &str,
         lang: Language,
     ) -> Result<Pattern, ServiceError> {
-        let cache_key = format!("{}:{}", lang, pattern_str);
+        let cache_key = format!("{lang}:{pattern_str}");
 
         // Try to get from cache first
         {

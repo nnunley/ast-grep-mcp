@@ -450,7 +450,7 @@ impl AstGrepService {
 
         // Create regex
         let regex = regex::Regex::from_str(regex_pattern)
-            .map_err(|e| ServiceError::ParserError(format!("Invalid regex pattern: {}", e)))?;
+            .map_err(|e| ServiceError::ParserError(format!("Invalid regex pattern: {e}")))?;
 
         let mut matches = Vec::new();
 
@@ -1439,7 +1439,7 @@ Always check the response for error conditions before processing results.
                                     });
                                 }
                                 Err(e) => {
-                                    warnings.push(format!("Pattern test failed: {}", e));
+                                    warnings.push(format!("Pattern test failed: {e}"));
                                 }
                             }
                         }
@@ -1494,7 +1494,7 @@ Always check the response for error conditions before processing results.
     fn get_rule_file_path(&self, rule_id: &str) -> PathBuf {
         self.config
             .rules_directory
-            .join(format!("{}.yaml", rule_id))
+            .join(format!("{rule_id}.yaml"))
     }
 
     #[tracing::instrument(skip(self), fields(rule_id))]
@@ -1524,7 +1524,7 @@ Always check the response for error conditions before processing results.
 
         // Write rule to file as YAML
         let yaml_content = serde_yaml::to_string(&config).map_err(|e| {
-            ServiceError::Internal(format!("Failed to serialize rule to YAML: {}", e))
+            ServiceError::Internal(format!("Failed to serialize rule to YAML: {e}"))
         })?;
 
         fs::write(&file_path, yaml_content)?;
@@ -1667,15 +1667,14 @@ Always check the response for error conditions before processing results.
         // Mock rule content - in real implementation, this would be fetched from the URL
         let mock_rule_config = format!(
             r#"
-id: {}
+id: {rule_id}
 message: "Imported rule from catalog"
 language: javascript
 severity: warning
 rule:
   pattern: console.log($VAR)
 fix: "// TODO: Replace with proper logging: console.log($VAR)"
-"#,
-            rule_id
+"#
         );
 
         // Use the existing create_rule method to store the imported rule
@@ -1688,12 +1687,12 @@ fix: "// TODO: Replace with proper logging: console.log($VAR)"
             Ok(_) => Ok(ImportCatalogRuleResult {
                 rule_id: rule_id.clone(),
                 imported: true,
-                message: format!("Successfully imported rule '{}' from catalog", rule_id),
+                message: format!("Successfully imported rule '{rule_id}' from catalog"),
             }),
             Err(e) => Ok(ImportCatalogRuleResult {
                 rule_id: rule_id.clone(),
                 imported: false,
-                message: format!("Failed to import rule: {}", e),
+                message: format!("Failed to import rule: {e}"),
             }),
         }
     }
