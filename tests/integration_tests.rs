@@ -1,6 +1,7 @@
 use std::fs;
 
-use ast_grep_mcp::ast_grep_service::{AstGrepService, FileReplaceParam, FileSearchParam};
+use ast_grep_mcp::ast_grep_service::AstGrepService;
+use ast_grep_mcp::{FileReplaceParam, FileSearchParam};
 use ast_grep_mcp::config::ServiceConfig;
 use tempfile::TempDir;
 
@@ -55,8 +56,8 @@ fn main() {
     };
 
     let result = service.file_search(param).await.unwrap();
-    assert_eq!(result.file_results.len(), 1);
-    assert_eq!(result.file_results[0].matches.len(), 2);
+    assert_eq!(result.matches.len(), 1);
+    assert_eq!(result.matches[0].matches.len(), 2);
 
     // Test file search for Rust using glob pattern
     let param = FileSearchParam {
@@ -67,8 +68,8 @@ fn main() {
     };
 
     let result = service.file_search(param).await.unwrap();
-    assert_eq!(result.file_results.len(), 1);
-    assert_eq!(result.file_results[0].matches.len(), 2);
+    assert_eq!(result.matches.len(), 1);
+    assert_eq!(result.matches[0].matches.len(), 2);
 }
 
 #[tokio::test]
@@ -154,7 +155,7 @@ async fn test_glob_pattern_matching() {
     };
 
     let result = service.file_search(param).await.unwrap();
-    assert_eq!(result.file_results.len(), 2); // Should find both JS files
+    assert_eq!(result.matches.len(), 2); // Should find both JS files
 
     // Test wildcard pattern (same as above, should get same results)
     let param = FileSearchParam {
@@ -165,7 +166,7 @@ async fn test_glob_pattern_matching() {
     };
 
     let result = service.file_search(param).await.unwrap();
-    assert_eq!(result.file_results.len(), 2); // Should find both JS files
+    assert_eq!(result.matches.len(), 2); // Should find both JS files
 }
 
 #[tokio::test]
@@ -210,8 +211,8 @@ async fn test_file_size_limit() {
 
     let result = service.file_search(param).await.unwrap();
     // Should still process the file since it's under the limit
-    assert_eq!(result.file_results.len(), 1);
-    assert_eq!(result.file_results[0].matches.len(), 1000);
+    assert_eq!(result.matches.len(), 1);
+    assert_eq!(result.matches[0].matches.len(), 1000);
 }
 
 #[tokio::test]
@@ -268,8 +269,8 @@ def add(a, b):
     };
 
     let result = service.file_search(param).await.unwrap();
-    assert_eq!(result.file_results.len(), 1);
-    assert_eq!(result.file_results[0].matches.len(), 1);
+    assert_eq!(result.matches.len(), 1);
+    assert_eq!(result.matches[0].matches.len(), 1);
 
     // Test Rust function search
     let param = FileSearchParam {
@@ -280,8 +281,8 @@ def add(a, b):
     };
 
     let result = service.file_search(param).await.unwrap();
-    assert_eq!(result.file_results.len(), 1);
-    assert_eq!(result.file_results[0].matches.len(), 1);
+    assert_eq!(result.matches.len(), 1);
+    assert_eq!(result.matches[0].matches.len(), 1);
 
     // Test Python function search
     let param = FileSearchParam {
@@ -292,8 +293,8 @@ def add(a, b):
     };
 
     let result = service.file_search(param).await.unwrap();
-    assert_eq!(result.file_results.len(), 1);
-    assert_eq!(result.file_results[0].matches.len(), 1);
+    assert_eq!(result.matches.len(), 1);
+    assert_eq!(result.matches[0].matches.len(), 1);
 }
 
 #[tokio::test]
@@ -329,7 +330,7 @@ function greet() {
     };
 
     let result = service.file_search(param).await.unwrap();
-    assert_eq!(result.file_results.len(), 0); // No matches found
+    assert_eq!(result.matches.len(), 0); // No matches found
 }
 
 #[tokio::test]

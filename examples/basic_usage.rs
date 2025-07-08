@@ -1,5 +1,6 @@
 /// Example showing basic usage of the ast-grep MCP service
-use ast_grep_mcp::ast_grep_service::{AstGrepService, SearchParam};
+use ast_grep_mcp::ast_grep_service::AstGrepService;
+use ast_grep_mcp::SearchParam;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
