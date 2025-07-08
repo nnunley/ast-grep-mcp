@@ -9,5 +9,5 @@ pub mod tools;
 pub mod types;
 
 // Re-export commonly used types
-pub use types::*;
 pub use rules::types::*;
+pub use types::*;

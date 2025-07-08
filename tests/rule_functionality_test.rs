@@ -1,6 +1,9 @@
 use ast_grep_mcp::ast_grep_service::AstGrepService;
-use ast_grep_mcp::{RuleSearchParam, RuleValidateParam, RuleReplaceParam, CreateRuleParam, DeleteRuleParam, GetRuleParam, ListRulesParam};
 use ast_grep_mcp::config::ServiceConfig;
+use ast_grep_mcp::{
+    CreateRuleParam, DeleteRuleParam, GetRuleParam, ListRulesParam, RuleReplaceParam,
+    RuleSearchParam, RuleValidateParam,
+};
 use std::fs;
 use tempfile::TempDir;
 
