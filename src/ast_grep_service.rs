@@ -2,8 +2,10 @@ use crate::config::ServiceConfig;
 use crate::errors::ServiceError;
 use crate::pattern::PatternMatcher;
 use crate::replace::ReplaceService;
+use crate::rules::*;
 use crate::rules::{CatalogManager, RuleEvaluator, RuleService, RuleStorage};
 use crate::search::SearchService;
+use crate::types::*;
 
 use lru::LruCache;
 use std::num::NonZeroUsize;
@@ -13,7 +15,7 @@ use std::{
 
 use ast_grep_core::{AstGrep, Pattern, Position, tree_sitter::StrDoc};
 use ast_grep_language::SupportLang as Language;
-use base64::{Engine as _, engine::general_purpose};
+// Removed unused base64 import
 use futures::stream::{self, StreamExt};
 use globset::{Glob, GlobSetBuilder};
 use rmcp::{
@@ -24,7 +26,7 @@ use rmcp::{
     },
     service::{RequestContext, RoleServer},
 };
-use serde::{Deserialize, Serialize};
+// Removed unused serde imports
 use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
@@ -474,14 +476,14 @@ impl AstGrepService {
 
     fn evaluate_inside_rule(
         &self,
-        inside_rule: &RelationalRule,
+        inside_rule: &RuleObject,
         code: &str,
         lang: Language,
     ) -> Result<Vec<MatchResult>, ServiceError> {
         let ast = AstGrep::new(code, lang);
 
         // Get matches for the container pattern
-        let container_matches = self.evaluate_rule_against_code(&inside_rule.rule, code, lang)?;
+        let container_matches = self.evaluate_rule_against_code(inside_rule, code, lang)?;
 
         // Get all possible target matches (from the main pattern in the parent rule)
         // For now, we'll search for a generic pattern to find candidate nodes
@@ -504,14 +506,14 @@ impl AstGrepService {
 
     fn evaluate_has_rule(
         &self,
-        has_rule: &RelationalRule,
+        has_rule: &RuleObject,
         code: &str,
         lang: Language,
     ) -> Result<Vec<MatchResult>, ServiceError> {
         let ast = AstGrep::new(code, lang);
 
         // Get matches for the child pattern we're looking for
-        let child_matches = self.evaluate_rule_against_code(&has_rule.rule, code, lang)?;
+        let child_matches = self.evaluate_rule_against_code(has_rule, code, lang)?;
 
         if child_matches.is_empty() {
             return Ok(vec![]);
@@ -542,14 +544,14 @@ impl AstGrepService {
 
     fn evaluate_follows_rule(
         &self,
-        follows_rule: &RelationalRule,
+        follows_rule: &RuleObject,
         code: &str,
         lang: Language,
     ) -> Result<Vec<MatchResult>, ServiceError> {
         let ast = AstGrep::new(code, lang);
 
         // Get matches for the preceding pattern
-        let preceding_matches = self.evaluate_rule_against_code(&follows_rule.rule, code, lang)?;
+        let preceding_matches = self.evaluate_rule_against_code(follows_rule, code, lang)?;
 
         if preceding_matches.is_empty() {
             return Ok(vec![]);
@@ -575,14 +577,14 @@ impl AstGrepService {
 
     fn evaluate_precedes_rule(
         &self,
-        precedes_rule: &RelationalRule,
+        precedes_rule: &RuleObject,
         code: &str,
         lang: Language,
     ) -> Result<Vec<MatchResult>, ServiceError> {
         let ast = AstGrep::new(code, lang);
 
         // Get matches for the following pattern
-        let following_matches = self.evaluate_rule_against_code(&precedes_rule.rule, code, lang)?;
+        let following_matches = self.evaluate_rule_against_code(precedes_rule, code, lang)?;
 
         if following_matches.is_empty() {
             return Ok(vec![]);
@@ -827,20 +829,23 @@ impl AstGrepService {
         builder.add(Glob::new(&param.path_pattern)?);
         let globset = builder.build()?;
 
-        let max_file_size = param.max_file_size.unwrap_or(self.config.max_file_size);
-        let max_results = param.limit.unwrap_or(self.config.limit);
+        let max_file_size = param.max_file_size;
+        let max_results = param.max_results;
 
         // Determine cursor position for pagination
         let cursor_path = if let Some(cursor) = &param.cursor {
             if cursor.is_complete {
                 // Previous search was complete, no more results
                 return Ok(FileSearchResult {
-                    file_results: vec![],
-                    next_cursor: Some(SearchCursor::complete()),
+                    matches: vec![],
+                    next_cursor: Some(CursorResult {
+                        last_file_path: String::new(),
+                        is_complete: true,
+                    }),
                     total_files_found: 0,
                 });
             }
-            Some(cursor.decode_path()?)
+            Some(cursor.last_file_path.clone())
         } else {
             None
         };
@@ -932,12 +937,21 @@ impl AstGrepService {
         // Determine next cursor
         let next_cursor = if file_results_raw.len() < max_results {
             // We got fewer results than requested, so we're done
-            Some(SearchCursor::complete())
+            Some(CursorResult {
+                last_file_path: String::new(),
+                is_complete: true,
+            })
         } else if let Some((last_path, _)) = file_results_raw.last() {
             // More results may be available
-            Some(SearchCursor::new(&last_path.to_string_lossy()))
+            Some(CursorResult {
+                last_file_path: last_path.to_string_lossy().to_string(),
+                is_complete: false,
+            })
         } else {
-            Some(SearchCursor::complete())
+            Some(CursorResult {
+                last_file_path: String::new(),
+                is_complete: true,
+            })
         };
 
         // Extract just the file results
@@ -948,7 +962,7 @@ impl AstGrepService {
 
         tracing::Span::current().record("files_with_matches", file_results.len());
         Ok(FileSearchResult {
-            file_results,
+            matches: file_results,
             next_cursor,
             total_files_found,
         })
@@ -987,9 +1001,13 @@ impl AstGrepService {
             .collect();
 
         if !matches.is_empty() {
+            let file_size_bytes = std::fs::metadata(&path)?.len();
+            let file_hash = format!("{:x}", sha2::Sha256::digest(std::fs::read(&path)?));
             Ok(Some(FileMatchResult {
-                file_path: path,
+                file_path: path.to_string_lossy().to_string(),
+                file_size_bytes,
                 matches,
+                file_hash,
             }))
         } else {
             Ok(None)
@@ -1017,7 +1035,10 @@ impl AstGrepService {
         }
         let rewritten_code = ast.root().text().to_string();
 
-        Ok(ReplaceResult { rewritten_code })
+        Ok(ReplaceResult {
+            new_code: rewritten_code,
+            changes: vec![],
+        })
     }
 
     #[tracing::instrument(skip(self), fields(language = %param.language, pattern = %param.pattern, replacement = %param.replacement, path_pattern = %param.path_pattern, dry_run = %param.dry_run, summary_only = %param.summary_only))]
@@ -1031,8 +1052,8 @@ impl AstGrepService {
         builder.add(Glob::new(&param.path_pattern)?);
         let globset = builder.build()?;
 
-        let max_file_size = param.max_file_size.unwrap_or(self.config.max_file_size);
-        let max_results = param.max_results.unwrap_or(self.config.limit);
+        let max_file_size = param.max_file_size;
+        let max_results = param.max_results;
 
         // Determine cursor position for pagination
         let cursor_path = if let Some(cursor) = &param.cursor {
@@ -1040,14 +1061,17 @@ impl AstGrepService {
                 return Ok(FileReplaceResult {
                     file_results: vec![],
                     summary_results: vec![],
-                    next_cursor: Some(SearchCursor::complete()),
+                    next_cursor: Some(CursorResult {
+                        last_file_path: String::new(),
+                        is_complete: true,
+                    }),
                     total_files_found: 0,
                     dry_run: param.dry_run,
                     total_changes: 0,
-                    files_with_changes: vec![],
+                    files_with_changes: 0,
                 });
             }
-            Some(cursor.decode_path()?)
+            Some(cursor.last_file_path.clone())
         } else {
             None
         };
@@ -1146,9 +1170,9 @@ impl AstGrepService {
 
                             if old_line != new_line {
                                 changes.push(FileDiffChange {
-                                    line: i + 1,
-                                    old_text: old_line.to_string(),
-                                    new_text: new_line.to_string(),
+                                    line_number: i + 1,
+                                    old_content: old_line.to_string(),
+                                    new_content: new_line.to_string(),
                                 });
                             }
                         }
@@ -1168,9 +1192,19 @@ impl AstGrepService {
                         (
                             path.clone(),
                             Ok(Some(FileDiffResult {
-                                file_path: path.clone(),
+                                file_path: path.to_string_lossy().to_string(),
                                 file_size_bytes: file_metadata.len(),
-                                changes,
+                                changes: changes
+                                    .into_iter()
+                                    .map(|c| ChangeResult {
+                                        start_line: c.line_number,
+                                        end_line: c.line_number,
+                                        start_col: 0,
+                                        end_col: 0,
+                                        old_text: c.old_content,
+                                        new_text: c.new_content,
+                                    })
+                                    .collect(),
                                 total_changes,
                                 file_hash: Self::calculate_file_hash(&file_content),
                             })),
@@ -1197,13 +1231,25 @@ impl AstGrepService {
                 .await;
 
         let next_cursor = if files_to_process.len() < max_results {
-            Some(SearchCursor::complete())
+            Some(CursorResult {
+                last_file_path: String::new(),
+                is_complete: true,
+            })
         } else if let Some((last_path, _)) = file_results_raw.last() {
-            Some(SearchCursor::new(&last_path.to_string_lossy()))
+            Some(CursorResult {
+                last_file_path: last_path.to_string_lossy().to_string(),
+                is_complete: false,
+            })
         } else if let Some(last_processed) = files_to_process.last() {
-            Some(SearchCursor::new(&last_processed.to_string_lossy()))
+            Some(CursorResult {
+                last_file_path: last_processed.to_string_lossy().to_string(),
+                is_complete: false,
+            })
         } else {
-            Some(SearchCursor::complete())
+            Some(CursorResult {
+                last_file_path: String::new(),
+                is_complete: true,
+            })
         };
 
         let file_results: Vec<FileDiffResult> = file_results_raw
@@ -1215,7 +1261,7 @@ impl AstGrepService {
         let total_changes: usize = file_results.iter().map(|r| r.total_changes).sum();
         let files_with_changes: Vec<(String, usize)> = file_results
             .iter()
-            .map(|r| (r.file_path.to_string_lossy().to_string(), r.total_changes))
+            .map(|r| (r.file_path.clone(), r.total_changes))
             .collect();
 
         tracing::Span::current().record("total_changes", total_changes);
@@ -1254,7 +1300,7 @@ impl AstGrepService {
                 total_files_found,
                 dry_run: param.dry_run,
                 total_changes,
-                files_with_changes,
+                files_with_changes: files_with_changes.len(),
             })
         } else {
             Ok(FileReplaceResult {
@@ -1264,7 +1310,7 @@ impl AstGrepService {
                 total_files_found,
                 dry_run: param.dry_run,
                 total_changes,
-                files_with_changes,
+                files_with_changes: files_with_changes.len(),
             })
         }
     }
@@ -1813,7 +1859,7 @@ The service returns structured errors for:
 Always check the response for error conditions before processing results.
         "##;
         Ok(DocumentationResult {
-            documentation: docs.to_string(),
+            content: docs.to_string(),
         })
     }
 
@@ -1824,7 +1870,7 @@ Always check the response for error conditions before processing results.
     ) -> Result<RuleValidateResult, ServiceError> {
         let mut errors = Vec::new();
         let mut warnings = Vec::new();
-        let mut test_matches = None;
+        let mut test_matches: Option<RuleTestResult> = None;
 
         // Parse the rule configuration
         let config = match self.parse_rule_config(&param.rule_config) {
@@ -1832,10 +1878,9 @@ Always check the response for error conditions before processing results.
             Err(e) => {
                 errors.push(e.to_string());
                 return Ok(RuleValidateResult {
-                    is_valid: false,
+                    valid: false,
                     errors,
-                    warnings,
-                    test_matches,
+                    test_results: None,
                 });
             }
         };
@@ -1859,7 +1904,15 @@ Always check the response for error conditions before processing results.
 
                             match self.search(search_param).await {
                                 Ok(result) => {
-                                    test_matches = Some(result.matches);
+                                    test_matches = Some(RuleTestResult {
+                                        matches_found: result.matches.len(),
+                                        sample_matches: result
+                                            .matches
+                                            .into_iter()
+                                            .take(5)
+                                            .map(|m| m.text)
+                                            .collect(),
+                                    });
                                 }
                                 Err(e) => {
                                     warnings.push(format!("Pattern test failed: {}", e));
@@ -1878,10 +1931,9 @@ Always check the response for error conditions before processing results.
         }
 
         Ok(RuleValidateResult {
-            is_valid: errors.is_empty(),
+            valid: errors.is_empty(),
             errors,
-            warnings,
-            test_matches,
+            test_results: test_matches,
         })
     }
 
@@ -1889,7 +1941,7 @@ Always check the response for error conditions before processing results.
     pub async fn rule_search(
         &self,
         param: RuleSearchParam,
-    ) -> Result<RuleSearchResult, ServiceError> {
+    ) -> Result<FileSearchResult, ServiceError> {
         // Parse the rule configuration
         let config = self.parse_rule_config(&param.rule_config)?;
         self.validate_rule_config(&config)?;
@@ -1917,7 +1969,7 @@ Always check the response for error conditions before processing results.
         config: &RuleConfig,
         pattern_str: String,
         param: RuleSearchParam,
-    ) -> Result<RuleSearchResult, ServiceError> {
+    ) -> Result<FileSearchResult, ServiceError> {
         let path_pattern = param.path_pattern.unwrap_or_else(|| "**/*".into());
 
         // Create equivalent FileSearchParam
@@ -1925,7 +1977,7 @@ Always check the response for error conditions before processing results.
             path_pattern,
             pattern: pattern_str,
             language: config.language.clone(),
-            limit: param.max_results,
+            max_results: param.max_results,
             max_file_size: param.max_file_size,
             cursor: param.cursor,
         };
@@ -1934,22 +1986,21 @@ Always check the response for error conditions before processing results.
         let search_result = self.file_search(file_search_param).await?;
 
         // Convert to rule search result format
-        let rule_matches: Vec<RuleMatchResult> = search_result
-            .file_results
+        let rule_matches: Vec<FileMatchResult> = search_result
+            .matches
             .into_iter()
-            .map(|file_result| RuleMatchResult {
-                file_path: file_result.file_path.to_string_lossy().to_string(),
+            .map(|file_result| FileMatchResult {
+                file_path: file_result.file_path,
+                file_size_bytes: file_result.file_size_bytes,
                 matches: file_result.matches,
-                message: config.message.clone(),
-                severity: config.severity.clone(),
+                file_hash: file_result.file_hash,
             })
             .collect();
 
-        Ok(RuleSearchResult {
-            rule_id: config.id.clone(),
+        Ok(FileSearchResult {
             matches: rule_matches,
             next_cursor: search_result.next_cursor,
-            total_files_processed: search_result.total_files_found,
+            total_files_found: search_result.total_files_found,
         })
     }
 
@@ -1957,7 +2008,7 @@ Always check the response for error conditions before processing results.
         &self,
         config: &RuleConfig,
         param: RuleSearchParam,
-    ) -> Result<RuleSearchResult, ServiceError> {
+    ) -> Result<FileSearchResult, ServiceError> {
         let lang = self.parse_language(&config.language)?;
         let path_pattern = param.path_pattern.unwrap_or_else(|| "**/*".into());
 
@@ -1966,8 +2017,8 @@ Always check the response for error conditions before processing results.
         builder.add(Glob::new(&path_pattern)?);
         let globset = builder.build()?;
 
-        let max_file_size = param.max_file_size.unwrap_or(self.config.max_file_size);
-        let max_results = param.max_results.unwrap_or(self.config.limit);
+        let max_file_size = param.max_file_size;
+        let max_results = param.max_results;
 
         // Get files to process
         let mut all_matching_files: Vec<_> = self
@@ -2007,11 +2058,12 @@ Always check the response for error conditions before processing results.
                 match self.evaluate_rule_against_code(&config.rule, &content, lang) {
                     Ok(matches) => {
                         if !matches.is_empty() {
-                            rule_matches.push(RuleMatchResult {
+                            let file_hash = format!("{:x}", sha2::Sha256::digest(&content));
+                            rule_matches.push(FileMatchResult {
                                 file_path: file_path.to_string_lossy().to_string(),
+                                file_size_bytes: content.len() as u64,
                                 matches,
-                                message: config.message.clone(),
-                                severity: config.severity.clone(),
+                                file_hash,
                             });
                         }
                     }
@@ -2022,11 +2074,10 @@ Always check the response for error conditions before processing results.
             }
         }
 
-        Ok(RuleSearchResult {
-            rule_id: config.id.clone(),
+        Ok(FileSearchResult {
             matches: rule_matches,
             next_cursor: None, // For now, no pagination for composite rules
-            total_files_processed: all_matching_files.len(),
+            total_files_found: all_matching_files.len(),
         })
     }
 
@@ -2034,7 +2085,7 @@ Always check the response for error conditions before processing results.
     pub async fn rule_replace(
         &self,
         param: RuleReplaceParam,
-    ) -> Result<RuleReplaceResult, ServiceError> {
+    ) -> Result<FileReplaceResult, ServiceError> {
         // Parse the rule configuration
         let config = self.parse_rule_config(&param.rule_config)?;
         self.validate_rule_config(&config)?;
@@ -2069,8 +2120,8 @@ Always check the response for error conditions before processing results.
             language: config.language.clone(),
             max_results: param.max_results,
             max_file_size: param.max_file_size,
-            dry_run: param.dry_run.unwrap_or(true),
-            summary_only: param.summary_only.unwrap_or(false),
+            dry_run: param.dry_run,
+            summary_only: param.summary_only,
             include_samples: false,
             max_samples: 3,
             cursor: param.cursor,
@@ -2079,13 +2130,14 @@ Always check the response for error conditions before processing results.
         // Use existing file_replace functionality
         let replace_result = self.file_replace(file_replace_param).await?;
 
-        Ok(RuleReplaceResult {
-            rule_id: config.id,
+        Ok(FileReplaceResult {
             file_results: replace_result.file_results,
+            summary_results: replace_result.summary_results,
             next_cursor: replace_result.next_cursor,
-            total_files_processed: replace_result.total_files_found,
-            total_changes: replace_result.total_changes,
+            total_files_found: replace_result.total_files_found,
             dry_run: replace_result.dry_run,
+            total_changes: replace_result.total_changes,
+            files_with_changes: replace_result.files_with_changes,
         })
     }
 
@@ -2120,7 +2172,7 @@ Always check the response for error conditions before processing results.
         let exists = file_path.exists();
 
         // Check if rule exists and overwrite is not allowed
-        if exists && !param.overwrite.unwrap_or(false) {
+        if exists && !param.overwrite {
             return Err(ServiceError::Internal(format!(
                 "Rule '{}' already exists. Use overwrite=true to replace it.",
                 config.id
@@ -2286,7 +2338,7 @@ fix: "// TODO: Replace with proper logging: console.log($VAR)"
         // Use the existing create_rule method to store the imported rule
         let create_param = CreateRuleParam {
             rule_config: mock_rule_config,
-            overwrite: Some(false),
+            overwrite: false,
         };
 
         match self.create_rule(create_param).await {
@@ -2313,15 +2365,15 @@ fix: "// TODO: Replace with proper logging: console.log($VAR)"
         if file_path.exists() {
             fs::remove_file(&file_path)?;
             Ok(DeleteRuleResult {
-                rule_id: param.rule_id,
+                rule_id: param.rule_id.clone(),
                 deleted: true,
-                file_path: Some(file_path.to_string_lossy().to_string()),
+                message: format!("Rule '{}' deleted successfully", param.rule_id),
             })
         } else {
             Ok(DeleteRuleResult {
-                rule_id: param.rule_id,
+                rule_id: param.rule_id.clone(),
                 deleted: false,
-                file_path: None,
+                message: format!("Rule '{}' not found", param.rule_id),
             })
         }
     }
@@ -2339,486 +2391,12 @@ fix: "// TODO: Replace with proper logging: console.log($VAR)"
 
         let content = fs::read_to_string(&file_path)?;
 
+        let rule_config = self.parse_rule_config(&content)?;
         Ok(GetRuleResult {
-            rule_config: content,
+            rule_config,
             file_path: file_path.to_string_lossy().to_string(),
         })
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MatchResult {
-    pub text: String,
-    pub vars: HashMap<String, String>,
-    pub start_line: usize,
-    pub end_line: usize,
-    pub start_col: usize,
-    pub end_col: usize,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct SearchParam {
-    pub code: String,
-    pub pattern: String,
-    pub language: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct SearchResult {
-    pub matches: Vec<MatchResult>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct SearchCursor {
-    /// Base64-encoded continuation token
-    pub last_file_path: String,
-    /// Whether this cursor represents the end of results
-    pub is_complete: bool,
-}
-
-impl SearchCursor {
-    pub fn new(path: &str) -> Self {
-        Self {
-            last_file_path: general_purpose::STANDARD.encode(path.as_bytes()),
-            is_complete: false,
-        }
-    }
-
-    pub fn complete() -> Self {
-        Self {
-            last_file_path: String::new(),
-            is_complete: true,
-        }
-    }
-
-    pub fn decode_path(&self) -> Result<String, ServiceError> {
-        if self.is_complete {
-            return Ok(String::new());
-        }
-        general_purpose::STANDARD
-            .decode(&self.last_file_path)
-            .map_err(|e| ServiceError::Internal(format!("Invalid cursor: {}", e)))
-            .and_then(|bytes| {
-                String::from_utf8(bytes)
-                    .map_err(|e| ServiceError::Internal(format!("Invalid cursor encoding: {}", e)))
-            })
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, Default)]
-pub struct FileSearchParam {
-    pub path_pattern: String,
-    pub pattern: String,
-    pub language: String,
-    #[serde(default)]
-    pub limit: Option<usize>,
-    #[serde(default)]
-    pub max_file_size: Option<u64>,
-    /// Continuation token from previous search
-    #[serde(default)]
-    pub cursor: Option<SearchCursor>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct FileSearchResult {
-    pub file_results: Vec<FileMatchResult>,
-    /// Continuation token for next page (None if no more results)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub next_cursor: Option<SearchCursor>,
-    /// Total number of files that matched the glob pattern (for progress indication)
-    pub total_files_found: usize,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct FileMatchResult {
-    pub file_path: PathBuf,
-    pub matches: Vec<MatchResult>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ReplaceParam {
-    pub code: String,
-    pub pattern: String,
-    pub replacement: String,
-    pub language: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ReplaceResult {
-    pub rewritten_code: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct FileReplaceParam {
-    pub path_pattern: String,
-    pub pattern: String,
-    pub replacement: String,
-    pub language: String,
-    #[serde(default)]
-    pub max_results: Option<usize>,
-    #[serde(default)]
-    pub max_file_size: Option<u64>,
-    /// Continuation token from previous replace operation
-    #[serde(default)]
-    pub cursor: Option<SearchCursor>,
-    /// If true (default), only show preview. If false, actually modify files.
-    #[serde(default = "default_dry_run")]
-    pub dry_run: bool,
-    /// If true, only return summary statistics (change counts per file)
-    #[serde(default)]
-    pub summary_only: bool,
-    /// If true, include sample changes in the response (first few changes per file)
-    #[serde(default)]
-    pub include_samples: bool,
-    /// Maximum number of sample changes to show per file (default: 3)
-    #[serde(default = "default_max_samples")]
-    pub max_samples: usize,
-}
-
-impl Default for FileReplaceParam {
-    fn default() -> Self {
-        Self {
-            path_pattern: String::new(),
-            pattern: String::new(),
-            replacement: String::new(),
-            language: String::new(),
-            max_results: None,
-            max_file_size: None,
-            cursor: None,
-            dry_run: true, // Default to true
-            summary_only: false,
-            include_samples: false,
-            max_samples: default_max_samples(),
-        }
-    }
-}
-
-fn default_dry_run() -> bool {
-    true
-}
-
-fn default_max_samples() -> usize {
-    3
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct FileReplaceResult {
-    /// Full diff results (only present when summary_only=false)
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub file_results: Vec<FileDiffResult>,
-    /// Summary results (only present when summary_only=true)
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub summary_results: Vec<FileSummaryResult>,
-    /// Continuation token for next page (None if no more results)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub next_cursor: Option<SearchCursor>,
-    /// Total number of files that matched the glob pattern (for progress indication)
-    pub total_files_found: usize,
-    /// Whether this was a dry run or actual file modification
-    pub dry_run: bool,
-    /// Total changes across all files
-    pub total_changes: usize,
-    /// Files with changes as (filename, change_count) pairs
-    pub files_with_changes: Vec<(String, usize)>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct FileDiffChange {
-    pub line: usize,
-    pub old_text: String,
-    pub new_text: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct FileDiffResult {
-    pub file_path: PathBuf,
-    pub file_size_bytes: u64,
-    pub changes: Vec<FileDiffChange>,
-    pub total_changes: usize,
-    pub file_hash: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct FileSummaryResult {
-    pub file_path: PathBuf,
-    pub file_size_bytes: u64,
-    pub total_changes: usize,
-    pub lines_changed: usize,
-    pub file_hash: String,
-    /// Sample changes if include_samples is true
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub sample_changes: Vec<FileDiffChange>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ListLanguagesParam {}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ListLanguagesResult {
-    pub languages: Vec<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct DocumentationParam {}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct DocumentationResult {
-    pub documentation: String,
-}
-
-// Rule configuration structures
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RuleConfig {
-    pub id: String,
-    pub message: Option<String>,
-    pub language: String,
-    pub severity: Option<String>,
-    pub rule: RuleObject,
-    pub fix: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RuleObject {
-    // Atomic rules
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pattern: Option<PatternSpec>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub kind: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub regex: Option<String>,
-
-    // Relational rules
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub inside: Option<Box<RelationalRule>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub has: Option<Box<RelationalRule>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub follows: Option<Box<RelationalRule>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub precedes: Option<Box<RelationalRule>>,
-
-    // Composite rules
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub all: Option<Vec<RuleObject>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub any: Option<Vec<RuleObject>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub not: Option<Box<RuleObject>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub matches: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum PatternSpec {
-    Simple(String),
-    Advanced {
-        context: String,
-        selector: Option<String>,
-        strictness: Option<Strictness>,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Strictness {
-    Cst,
-    Smart,
-    Ast,
-    Relaxed,
-    Signature,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RelationalRule {
-    #[serde(flatten)]
-    pub rule: RuleObject,
-    #[serde(default, rename = "stopBy", skip_serializing_if = "Option::is_none")]
-    pub stop_by: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub field: Option<String>,
-}
-
-// Rule-based search parameters
-#[derive(Debug, Serialize, Deserialize)]
-pub struct RuleSearchParam {
-    pub rule_config: String, // YAML or JSON rule configuration
-    #[serde(default)]
-    pub path_pattern: Option<String>,
-    #[serde(default)]
-    pub max_results: Option<usize>,
-    #[serde(default)]
-    pub max_file_size: Option<u64>,
-    #[serde(default)]
-    pub cursor: Option<SearchCursor>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct RuleSearchResult {
-    pub rule_id: String,
-    pub matches: Vec<RuleMatchResult>,
-    pub next_cursor: Option<SearchCursor>,
-    pub total_files_processed: usize,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct RuleMatchResult {
-    pub file_path: String,
-    pub matches: Vec<MatchResult>,
-    pub message: Option<String>,
-    pub severity: Option<String>,
-}
-
-// Rule-based replacement parameters
-#[derive(Debug, Serialize, Deserialize)]
-pub struct RuleReplaceParam {
-    pub rule_config: String, // YAML or JSON rule configuration
-    #[serde(default)]
-    pub path_pattern: Option<String>,
-    #[serde(default)]
-    pub max_results: Option<usize>,
-    #[serde(default)]
-    pub max_file_size: Option<u64>,
-    #[serde(default)]
-    pub dry_run: Option<bool>,
-    #[serde(default)]
-    pub summary_only: Option<bool>,
-    #[serde(default)]
-    pub cursor: Option<SearchCursor>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct RuleReplaceResult {
-    pub rule_id: String,
-    pub file_results: Vec<FileDiffResult>,
-    pub next_cursor: Option<SearchCursor>,
-    pub total_files_processed: usize,
-    pub total_changes: usize,
-    pub dry_run: bool,
-}
-
-// Rule validation parameters
-#[derive(Debug, Serialize, Deserialize)]
-pub struct RuleValidateParam {
-    pub rule_config: String, // YAML or JSON rule configuration
-    #[serde(default)]
-    pub test_code: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct RuleValidateResult {
-    pub is_valid: bool,
-    pub errors: Vec<String>,
-    pub warnings: Vec<String>,
-    pub test_matches: Option<Vec<MatchResult>>,
-}
-
-// Rule management structures
-#[derive(Debug, Serialize, Deserialize)]
-pub struct CreateRuleParam {
-    pub rule_config: String, // YAML or JSON rule configuration
-    #[serde(default)]
-    pub overwrite: Option<bool>, // Whether to overwrite existing rule with same ID
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct CreateRuleResult {
-    pub rule_id: String,
-    pub file_path: String,
-    pub created: bool, // true if created, false if updated
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ListRulesParam {
-    #[serde(default)]
-    pub language: Option<String>, // Filter by language
-    #[serde(default)]
-    pub severity: Option<String>, // Filter by severity
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ListRulesResult {
-    pub rules: Vec<RuleInfo>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct RuleInfo {
-    pub id: String,
-    pub language: String,
-    pub message: Option<String>,
-    pub severity: Option<String>,
-    pub file_path: String,
-    pub has_fix: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ListCatalogRulesParam {
-    pub language: Option<String>,
-    pub category: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ListCatalogRulesResult {
-    pub rules: Vec<CatalogRuleInfo>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CatalogRuleInfo {
-    pub id: String,
-    pub name: String,
-    pub description: String,
-    pub language: String,
-    pub category: String,
-    pub url: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ImportCatalogRuleParam {
-    pub rule_url: String,
-    pub rule_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ImportCatalogRuleResult {
-    pub rule_id: String,
-    pub imported: bool,
-    pub message: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct DeleteRuleParam {
-    pub rule_id: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct DeleteRuleResult {
-    pub rule_id: String,
-    pub deleted: bool,
-    pub file_path: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GenerateAstParam {
-    pub code: String,
-    pub language: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct GenerateAstResult {
-    pub ast: String,
-    pub language: String,
-    pub code_length: usize,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct GetRuleParam {
-    pub rule_id: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct GetRuleResult {
-    pub rule_config: String,
-    pub file_path: String,
 }
 
 impl ServerHandler for AstGrepService {
@@ -3299,8 +2877,8 @@ mod tests {
         };
 
         let result = service.replace(param).await.unwrap();
-        assert!(result.rewritten_code.contains("function newName()"));
-        assert!(!result.rewritten_code.contains("function oldName()"));
+        assert!(result.new_code.contains("function newName()"));
+        assert!(!result.new_code.contains("function oldName()"));
     }
 
     #[tokio::test]
@@ -3314,9 +2892,9 @@ mod tests {
         };
 
         let result = service.replace(param).await.unwrap();
-        assert!(result.rewritten_code.contains("let x = 5"));
-        assert!(result.rewritten_code.contains("let y = 10"));
-        assert!(!result.rewritten_code.contains("const"));
+        assert!(result.new_code.contains("let x = 5"));
+        assert!(result.new_code.contains("let y = 10"));
+        assert!(!result.new_code.contains("const"));
     }
 
     #[tokio::test]
@@ -3330,7 +2908,7 @@ mod tests {
         };
         let result = service.replace(param).await.unwrap();
         assert_eq!(
-            result.rewritten_code,
+            result.new_code,
             "const a = 1; const b = 2; const c = 3;"
         );
     }
@@ -3368,16 +2946,22 @@ mod tests {
     #[tokio::test]
     async fn test_search_cursor() {
         // Test cursor creation and decoding
-        let cursor = SearchCursor::new("src/main.rs");
+        let cursor = CursorParam {
+            last_file_path: "src/main.rs".to_string(),
+            is_complete: false,
+        };
         assert!(!cursor.is_complete);
 
-        let decoded = cursor.decode_path().unwrap();
+        let decoded = cursor.last_file_path.clone();
         assert_eq!(decoded, "src/main.rs");
 
         // Test complete cursor
-        let complete_cursor = SearchCursor::complete();
+        let complete_cursor = CursorParam {
+            last_file_path: String::new(),
+            is_complete: true,
+        };
         assert!(complete_cursor.is_complete);
-        assert_eq!(complete_cursor.decode_path().unwrap(), "");
+        assert_eq!(complete_cursor.last_file_path, "");
     }
 
     #[tokio::test]
@@ -3403,10 +2987,10 @@ mod tests {
         let param = DocumentationParam {};
 
         let result = service.documentation(param).await.unwrap();
-        assert!(result.documentation.contains("search"));
-        assert!(result.documentation.contains("file_search"));
-        assert!(result.documentation.contains("replace"));
-        assert!(result.documentation.contains("file_replace"));
+        assert!(result.content.contains("search"));
+        assert!(result.content.contains("file_search"));
+        assert!(result.content.contains("replace"));
+        assert!(result.content.contains("file_replace"));
     }
 
     #[tokio::test]

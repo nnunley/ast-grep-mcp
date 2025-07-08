@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 // Basic search and replace types
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchParam {
     pub code: String,
     pub pattern: String,
@@ -17,7 +17,7 @@ pub struct SearchResult {
     pub matches: Vec<MatchResult>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MatchResult {
     pub text: String,
     pub start_line: usize,
@@ -150,6 +150,13 @@ pub struct FileDiffResult {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct FileDiffChange {
+    pub line_number: usize,
+    pub old_content: String,
+    pub new_content: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct FileSummaryResult {
     pub file_path: String,
     pub file_size_bytes: u64,
@@ -195,6 +202,20 @@ pub struct CatalogRuleInfo {
     pub language: String,
     pub category: String,
     pub url: String,
+}
+
+// AST generation types
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GenerateAstParam {
+    pub code: String,
+    pub language: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GenerateAstResult {
+    pub ast: String,
+    pub language: String,
+    pub code_length: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
