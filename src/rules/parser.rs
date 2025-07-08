@@ -1,8 +1,38 @@
+use super::ast::Rule;
 use super::types::{RuleConfig, RuleTestResult, RuleValidateParam, RuleValidateResult};
 use crate::errors::ServiceError;
 // Removed unused import
 use ast_grep_language::SupportLang as Language;
+use serde::{Deserialize, Serialize};
 use std::str::FromStr;
+
+/// Rule configuration that supports direct parsing into Rule enum
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuleConfigEnum {
+    pub id: String,
+    pub message: Option<String>,
+    pub language: String,
+    pub severity: Option<String>,
+    pub rule: Rule,
+    pub fix: Option<String>,
+}
+
+/// Parse rule configuration with enum-based Rule AST
+pub fn parse_rule_config_enum(content: &str) -> Result<RuleConfigEnum, ServiceError> {
+    // Try parsing as YAML first
+    if let Ok(rule) = serde_yaml::from_str::<RuleConfigEnum>(content) {
+        return Ok(rule);
+    }
+
+    // Fall back to JSON
+    if let Ok(rule) = serde_json::from_str::<RuleConfigEnum>(content) {
+        return Ok(rule);
+    }
+
+    Err(ServiceError::ParserError(
+        "Rule configuration must be valid YAML or JSON".to_string(),
+    ))
+}
 
 pub fn parse_rule_config(content: &str) -> Result<RuleConfig, ServiceError> {
     // Try parsing as YAML first

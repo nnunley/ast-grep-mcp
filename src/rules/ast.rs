@@ -2,8 +2,7 @@ use serde::{Deserialize, Serialize};
 
 /// Enum-based AST representation for rules
 /// This provides a cleaner, more type-safe way to represent rule structures
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
+#[derive(Debug, Clone, Serialize)]
 pub enum Rule {
     /// Simple pattern matching rule
     Pattern(PatternRule),
@@ -47,7 +46,6 @@ pub enum Rule {
 
 /// Pattern rule with optional advanced features
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
 pub enum PatternRule {
     /// Simple pattern string
     Simple { pattern: String },

@@ -1,4 +1,5 @@
 pub mod ast_grep_service;
+pub mod ast_utils;
 pub mod config;
 pub mod errors;
 pub mod pattern;

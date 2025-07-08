@@ -1,3 +1,4 @@
+use crate::ast_utils::AstParser;
 use crate::config::ServiceConfig;
 use crate::errors::ServiceError;
 use crate::pattern::PatternMatcher;
@@ -11,7 +12,7 @@ use lru::LruCache;
 use std::num::NonZeroUsize;
 use std::{borrow::Cow, fs, path::PathBuf, str::FromStr, sync::Arc, sync::Mutex};
 
-use ast_grep_core::{AstGrep, Pattern};
+use ast_grep_core::Pattern;
 use ast_grep_language::SupportLang as Language;
 // Removed unused base64 import
 use rmcp::{
@@ -177,49 +178,14 @@ impl AstGrepService {
         param: GenerateAstParam,
     ) -> Result<GenerateAstResult, ServiceError> {
         let lang = self.parse_language(&param.language)?;
-        let ast = AstGrep::new(&param.code, lang);
-
-        // Build a string representation of the AST
-        let ast_string = Self::build_ast_string(ast.root(), 0);
+        let ast_parser = AstParser::new();
+        let ast_string = ast_parser.generate_ast_debug_string(&param.code, lang);
 
         Ok(GenerateAstResult {
             ast: ast_string,
             language: param.language,
             code_length: param.code.chars().count(),
         })
-    }
-
-    /// Recursively build a string representation of the AST
-    fn build_ast_string<D: ast_grep_core::Doc>(
-        node: ast_grep_core::Node<D>,
-        depth: usize,
-    ) -> String {
-        let indent = "  ".repeat(depth);
-        let mut result = format!(
-            "{}{}[{}:{}]",
-            indent,
-            node.kind(),
-            node.range().start,
-            node.range().end
-        );
-
-        // Add node text if it's a leaf node or short
-        let node_text = node.text();
-        if node.children().count() == 0 || node_text.len() <= 50 {
-            let escaped_text = node_text.replace('\n', "\\n").replace('\r', "\\r");
-            if !escaped_text.trim().is_empty() {
-                result.push_str(&format!(" \"{escaped_text}\""));
-            }
-        }
-
-        result.push('\n');
-
-        // Recursively add children
-        for child in node.children() {
-            result.push_str(&Self::build_ast_string(child, depth + 1));
-        }
-
-        result
     }
 
     fn parse_rule_config(&self, rule_config_str: &str) -> Result<RuleConfig, ServiceError> {
