@@ -105,8 +105,12 @@ function debug() {
     let file_result = &result.file_results[0];
     assert_eq!(file_result.total_changes, 2);
 
+    // Debug: Check what the rule replace actually returned
+    println!("Replace result: {result:#?}");
+
     // Verify the file was actually modified
     let modified_content = fs::read_to_string(temp_dir.path().join("debug.js")).unwrap();
+    println!("Modified content: {modified_content}");
     assert!(modified_content.contains("logger.log"));
     assert!(!modified_content.contains("console.log"));
 }
