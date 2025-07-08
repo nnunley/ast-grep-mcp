@@ -1,4 +1,7 @@
-use std::{borrow::Cow, collections::HashMap, fmt, io, path::PathBuf, str::FromStr, sync::Arc, sync::Mutex, fs};
+use std::{
+    borrow::Cow, collections::HashMap, fmt, fs, io, path::PathBuf, str::FromStr, sync::Arc,
+    sync::Mutex,
+};
 
 use ast_grep_core::{AstGrep, Pattern};
 use ast_grep_language::SupportLang as Language;
@@ -142,7 +145,11 @@ impl AstGrepService {
         format!("sha256:{}", hex::encode(hasher.finalize()))
     }
 
-    fn get_or_create_pattern(&self, pattern_str: &str, lang: Language) -> Result<Pattern, ServiceError> {
+    fn get_or_create_pattern(
+        &self,
+        pattern_str: &str,
+        lang: Language,
+    ) -> Result<Pattern, ServiceError> {
         let cache_key = format!("{}:{}", lang as u8, pattern_str);
 
         // First try to get from cache
@@ -174,8 +181,12 @@ impl AstGrepService {
         }
 
         // If YAML fails, try JSON
-        serde_json::from_str::<RuleConfig>(rule_config_str)
-            .map_err(|e| ServiceError::ParserError(format!("Failed to parse rule config as YAML or JSON: {}", e)))
+        serde_json::from_str::<RuleConfig>(rule_config_str).map_err(|e| {
+            ServiceError::ParserError(format!(
+                "Failed to parse rule config as YAML or JSON: {}",
+                e
+            ))
+        })
     }
 
     fn validate_rule_config(&self, config: &RuleConfig) -> Result<(), ServiceError> {
@@ -184,24 +195,26 @@ impl AstGrepService {
 
         // Validate rule has at least one condition
         if !self.has_rule_condition(&config.rule) {
-            return Err(ServiceError::ParserError("Rule must have at least one condition".into()));
+            return Err(ServiceError::ParserError(
+                "Rule must have at least one condition".into(),
+            ));
         }
 
         Ok(())
     }
 
     fn has_rule_condition(&self, rule: &RuleObject) -> bool {
-        rule.pattern.is_some() ||
-        rule.kind.is_some() ||
-        rule.regex.is_some() ||
-        rule.inside.is_some() ||
-        rule.has.is_some() ||
-        rule.follows.is_some() ||
-        rule.precedes.is_some() ||
-        rule.all.as_ref().is_some_and(|v| !v.is_empty()) ||
-        rule.any.as_ref().is_some_and(|v| !v.is_empty()) ||
-        rule.not.is_some() ||
-        rule.matches.is_some()
+        rule.pattern.is_some()
+            || rule.kind.is_some()
+            || rule.regex.is_some()
+            || rule.inside.is_some()
+            || rule.has.is_some()
+            || rule.follows.is_some()
+            || rule.precedes.is_some()
+            || rule.all.as_ref().is_some_and(|v| !v.is_empty())
+            || rule.any.as_ref().is_some_and(|v| !v.is_empty())
+            || rule.not.is_some()
+            || rule.matches.is_some()
     }
 
     fn extract_pattern_from_rule(&self, rule: &RuleObject) -> Option<String> {
@@ -214,17 +227,17 @@ impl AstGrepService {
 
     fn is_simple_pattern_rule(&self, rule: &RuleObject) -> bool {
         // Check if this is a simple pattern rule that we can handle directly
-        rule.pattern.is_some() &&
-        rule.kind.is_none() &&
-        rule.regex.is_none() &&
-        rule.inside.is_none() &&
-        rule.has.is_none() &&
-        rule.follows.is_none() &&
-        rule.precedes.is_none() &&
-        rule.all.is_none() &&
-        rule.any.is_none() &&
-        rule.not.is_none() &&
-        rule.matches.is_none()
+        rule.pattern.is_some()
+            && rule.kind.is_none()
+            && rule.regex.is_none()
+            && rule.inside.is_none()
+            && rule.has.is_none()
+            && rule.follows.is_none()
+            && rule.precedes.is_none()
+            && rule.all.is_none()
+            && rule.any.is_none()
+            && rule.not.is_none()
+            && rule.matches.is_none()
     }
 
     #[allow(dead_code)]
@@ -258,7 +271,12 @@ impl AstGrepService {
         patterns
     }
 
-    fn evaluate_rule_against_code(&self, rule: &RuleObject, code: &str, lang: Language) -> Result<Vec<MatchResult>, ServiceError> {
+    fn evaluate_rule_against_code(
+        &self,
+        rule: &RuleObject,
+        code: &str,
+        lang: Language,
+    ) -> Result<Vec<MatchResult>, ServiceError> {
         // Handle different rule types
         if let Some(pattern_spec) = &rule.pattern {
             // Simple pattern rule
@@ -279,11 +297,18 @@ impl AstGrepService {
             // Regex rule - match nodes by text content
             self.evaluate_regex_rule(regex, code, lang)
         } else {
-            Err(ServiceError::ParserError("Rule must have at least one condition".into()))
+            Err(ServiceError::ParserError(
+                "Rule must have at least one condition".into(),
+            ))
         }
     }
 
-    fn evaluate_pattern_rule(&self, pattern_spec: &PatternSpec, code: &str, lang: Language) -> Result<Vec<MatchResult>, ServiceError> {
+    fn evaluate_pattern_rule(
+        &self,
+        pattern_spec: &PatternSpec,
+        code: &str,
+        lang: Language,
+    ) -> Result<Vec<MatchResult>, ServiceError> {
         let pattern_str = match pattern_spec {
             PatternSpec::Simple(pattern) => pattern.clone(),
             PatternSpec::Advanced { context, .. } => context.clone(),
@@ -307,7 +332,12 @@ impl AstGrepService {
         Ok(matches)
     }
 
-    fn evaluate_kind_rule(&self, _kind: &str, code: &str, lang: Language) -> Result<Vec<MatchResult>, ServiceError> {
+    fn evaluate_kind_rule(
+        &self,
+        _kind: &str,
+        code: &str,
+        lang: Language,
+    ) -> Result<Vec<MatchResult>, ServiceError> {
         // For now, use a simple pattern that matches any node
         // This is a placeholder - proper kind matching would require deeper AST integration
         let ast = AstGrep::new(code, lang);
@@ -327,17 +357,19 @@ impl AstGrepService {
 
                 // For now, include all matches since we can't easily check AST node kind
                 // This is a simplified implementation
-                MatchResult {
-                    text,
-                    vars,
-                }
+                MatchResult { text, vars }
             })
             .collect();
 
         Ok(matches)
     }
 
-    fn evaluate_regex_rule(&self, regex_pattern: &str, code: &str, _lang: Language) -> Result<Vec<MatchResult>, ServiceError> {
+    fn evaluate_regex_rule(
+        &self,
+        regex_pattern: &str,
+        code: &str,
+        _lang: Language,
+    ) -> Result<Vec<MatchResult>, ServiceError> {
         use std::str::FromStr;
 
         // Create regex
@@ -357,7 +389,12 @@ impl AstGrepService {
         Ok(matches)
     }
 
-    fn evaluate_all_rule(&self, all_rules: &[RuleObject], code: &str, lang: Language) -> Result<Vec<MatchResult>, ServiceError> {
+    fn evaluate_all_rule(
+        &self,
+        all_rules: &[RuleObject],
+        code: &str,
+        lang: Language,
+    ) -> Result<Vec<MatchResult>, ServiceError> {
         if all_rules.is_empty() {
             return Ok(Vec::new());
         }
@@ -376,7 +413,12 @@ impl AstGrepService {
         Ok(current_matches)
     }
 
-    fn evaluate_any_rule(&self, any_rules: &[RuleObject], code: &str, lang: Language) -> Result<Vec<MatchResult>, ServiceError> {
+    fn evaluate_any_rule(
+        &self,
+        any_rules: &[RuleObject],
+        code: &str,
+        lang: Language,
+    ) -> Result<Vec<MatchResult>, ServiceError> {
         let mut all_matches = Vec::new();
 
         // Collect matches from all rules
@@ -392,12 +434,18 @@ impl AstGrepService {
         Ok(all_matches)
     }
 
-    fn evaluate_not_rule(&self, not_rule: &RuleObject, code: &str, lang: Language) -> Result<Vec<MatchResult>, ServiceError> {
+    fn evaluate_not_rule(
+        &self,
+        not_rule: &RuleObject,
+        code: &str,
+        lang: Language,
+    ) -> Result<Vec<MatchResult>, ServiceError> {
         // This is complex - we need to find all nodes that DON'T match the rule
         // For now, implement a simplified approach using text analysis
 
         let excluded_matches = self.evaluate_rule_against_code(not_rule, code, lang)?;
-        let excluded_texts: std::collections::HashSet<String> = excluded_matches.iter().map(|m| m.text.clone()).collect();
+        let excluded_texts: std::collections::HashSet<String> =
+            excluded_matches.iter().map(|m| m.text.clone()).collect();
 
         // Get all possible tokens/expressions and filter out the excluded ones
         let ast = AstGrep::new(code, lang);
@@ -410,10 +458,7 @@ impl AstGrepService {
                 let text = node.text().to_string();
                 if !excluded_texts.contains(&text) {
                     let vars: HashMap<String, String> = node.get_env().clone().into();
-                    Some(MatchResult {
-                        text,
-                        vars,
-                    })
+                    Some(MatchResult { text, vars })
                 } else {
                     None
                 }
@@ -423,8 +468,13 @@ impl AstGrepService {
         Ok(filtered_matches)
     }
 
-    fn intersect_matches(&self, matches1: Vec<MatchResult>, matches2: Vec<MatchResult>) -> Vec<MatchResult> {
-        let texts2: std::collections::HashSet<String> = matches2.iter().map(|m| m.text.clone()).collect();
+    fn intersect_matches(
+        &self,
+        matches1: Vec<MatchResult>,
+        matches2: Vec<MatchResult>,
+    ) -> Vec<MatchResult> {
+        let texts2: std::collections::HashSet<String> =
+            matches2.iter().map(|m| m.text.clone()).collect();
 
         matches1
             .into_iter()
@@ -857,7 +907,11 @@ impl AstGrepService {
                 .into_iter()
                 .map(|diff_result| {
                     let sample_changes = if param.include_samples {
-                        diff_result.changes.into_iter().take(param.max_samples).collect()
+                        diff_result
+                            .changes
+                            .into_iter()
+                            .take(param.max_samples)
+                            .collect()
                     } else {
                         vec![]
                     };
@@ -1497,7 +1551,8 @@ Always check the response for error conditions before processing results.
                         }
                     }
                 } else {
-                    warnings.push("Complex rule detected - basic pattern testing not available".into());
+                    warnings
+                        .push("Complex rule detected - basic pattern testing not available".into());
                 }
             }
         }
@@ -1524,10 +1579,13 @@ Always check the response for error conditions before processing results.
         // Check if this is a simple pattern rule or a composite rule
         if self.is_simple_pattern_rule(&config.rule) {
             // Handle simple pattern rule
-            let pattern_str = self.extract_pattern_from_rule(&config.rule)
+            let pattern_str = self
+                .extract_pattern_from_rule(&config.rule)
                 .ok_or_else(|| ServiceError::ParserError("Pattern rule missing pattern".into()))?;
 
-            return self.handle_simple_pattern_rule_search(&config, pattern_str, param).await;
+            return self
+                .handle_simple_pattern_rule_search(&config, pattern_str, param)
+                .await;
         } else {
             // Handle composite rules
             return self.handle_composite_rule_search(&config, param).await;
@@ -1556,7 +1614,8 @@ Always check the response for error conditions before processing results.
         let search_result = self.file_search(file_search_param).await?;
 
         // Convert to rule search result format
-        let rule_matches: Vec<RuleMatchResult> = search_result.file_results
+        let rule_matches: Vec<RuleMatchResult> = search_result
+            .file_results
             .into_iter()
             .map(|file_result| RuleMatchResult {
                 file_path: file_result.file_path.to_string_lossy().to_string(),
@@ -1663,16 +1722,21 @@ Always check the response for error conditions before processing results.
         tracing::Span::current().record("rule_id", &config.id);
 
         // Extract the fix/replacement from the rule config
-        let replacement = config.fix
-            .as_ref()
-            .ok_or_else(|| ServiceError::ParserError("Rule configuration must include 'fix' field for replacement".into()))?;
+        let replacement = config.fix.as_ref().ok_or_else(|| {
+            ServiceError::ParserError(
+                "Rule configuration must include 'fix' field for replacement".into(),
+            )
+        })?;
 
         // For now, only handle simple pattern rules
         if !self.is_simple_pattern_rule(&config.rule) {
-            return Err(ServiceError::ParserError("Only simple pattern rules are currently supported for replacement".into()));
+            return Err(ServiceError::ParserError(
+                "Only simple pattern rules are currently supported for replacement".into(),
+            ));
         }
 
-        let pattern_str = self.extract_pattern_from_rule(&config.rule)
+        let pattern_str = self
+            .extract_pattern_from_rule(&config.rule)
             .ok_or_else(|| ServiceError::ParserError("Pattern rule missing pattern".into()))?;
 
         let path_pattern = param.path_pattern.unwrap_or_else(|| "**/*".into());
@@ -1713,7 +1777,9 @@ Always check the response for error conditions before processing results.
     }
 
     fn get_rule_file_path(&self, rule_id: &str) -> PathBuf {
-        self.config.rules_directory.join(format!("{}.yaml", rule_id))
+        self.config
+            .rules_directory
+            .join(format!("{}.yaml", rule_id))
     }
 
     #[tracing::instrument(skip(self), fields(rule_id))]
@@ -1735,12 +1801,16 @@ Always check the response for error conditions before processing results.
 
         // Check if rule exists and overwrite is not allowed
         if exists && !param.overwrite.unwrap_or(false) {
-            return Err(ServiceError::Internal(format!("Rule '{}' already exists. Use overwrite=true to replace it.", config.id)));
+            return Err(ServiceError::Internal(format!(
+                "Rule '{}' already exists. Use overwrite=true to replace it.",
+                config.id
+            )));
         }
 
         // Write rule to file as YAML
-        let yaml_content = serde_yaml::to_string(&config)
-            .map_err(|e| ServiceError::Internal(format!("Failed to serialize rule to YAML: {}", e)))?;
+        let yaml_content = serde_yaml::to_string(&config).map_err(|e| {
+            ServiceError::Internal(format!("Failed to serialize rule to YAML: {}", e))
+        })?;
 
         fs::write(&file_path, yaml_content)?;
 
@@ -1752,10 +1822,7 @@ Always check the response for error conditions before processing results.
     }
 
     #[tracing::instrument(skip(self))]
-    pub async fn list_rules(
-        &self,
-        param: ListRulesParam,
-    ) -> Result<ListRulesResult, ServiceError> {
+    pub async fn list_rules(&self, param: ListRulesParam) -> Result<ListRulesResult, ServiceError> {
         // Ensure rules directory exists
         self.ensure_rules_directory()?;
 
@@ -1766,7 +1833,10 @@ Always check the response for error conditions before processing results.
             let entry = entry?;
             let path = entry.path();
 
-            if path.extension().is_some_and(|ext| ext == "yaml" || ext == "yml") {
+            if path
+                .extension()
+                .is_some_and(|ext| ext == "yaml" || ext == "yml")
+            {
                 match self.load_rule_from_file(&path) {
                     Ok(config) => {
                         // Apply filters
@@ -1839,7 +1909,8 @@ Always check the response for error conditions before processing results.
                 description: "Replace == with === for strict equality".to_string(),
                 language: "javascript".to_string(),
                 category: "best-practices".to_string(),
-                url: "https://ast-grep.github.io/catalog/javascript/use-strict-equality".to_string(),
+                url: "https://ast-grep.github.io/catalog/javascript/use-strict-equality"
+                    .to_string(),
             },
         ];
 
@@ -1870,7 +1941,8 @@ Always check the response for error conditions before processing results.
         // Extract rule ID from URL or use provided one
         let rule_id = param.rule_id.unwrap_or_else(|| {
             // Extract ID from URL (last segment)
-            param.rule_url
+            param
+                .rule_url
                 .split('/')
                 .last()
                 .unwrap_or("imported-rule")
@@ -1935,14 +2007,14 @@ fix: "// TODO: Replace with proper logging: console.log($VAR)"
     }
 
     #[tracing::instrument(skip(self), fields(rule_id = %param.rule_id))]
-    pub async fn get_rule(
-        &self,
-        param: GetRuleParam,
-    ) -> Result<GetRuleResult, ServiceError> {
+    pub async fn get_rule(&self, param: GetRuleParam) -> Result<GetRuleResult, ServiceError> {
         let file_path = self.get_rule_file_path(&param.rule_id);
 
         if !file_path.exists() {
-            return Err(ServiceError::Internal(format!("Rule '{}' not found", param.rule_id)));
+            return Err(ServiceError::Internal(format!(
+                "Rule '{}' not found",
+                param.rule_id
+            )));
         }
 
         let content = fs::read_to_string(&file_path)?;
@@ -2776,21 +2848,27 @@ impl ServerHandler for AstGrepService {
                 Ok(CallToolResult::success(vec![Content::json(json_value)?]))
             }
             "list_catalog_rules" => {
-                let param: ListCatalogRulesParam = serde_json::from_value(serde_json::Value::Object(
-                    request.arguments.unwrap_or_default(),
-                ))
+                let param: ListCatalogRulesParam = serde_json::from_value(
+                    serde_json::Value::Object(request.arguments.unwrap_or_default()),
+                )
                 .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
-                let result = self.list_catalog_rules(param).await.map_err(ErrorData::from)?;
+                let result = self
+                    .list_catalog_rules(param)
+                    .await
+                    .map_err(ErrorData::from)?;
                 let json_value = serde_json::to_value(&result)
                     .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))?;
                 Ok(CallToolResult::success(vec![Content::json(json_value)?]))
             }
             "import_catalog_rule" => {
-                let param: ImportCatalogRuleParam = serde_json::from_value(serde_json::Value::Object(
-                    request.arguments.unwrap_or_default(),
-                ))
+                let param: ImportCatalogRuleParam = serde_json::from_value(
+                    serde_json::Value::Object(request.arguments.unwrap_or_default()),
+                )
                 .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
-                let result = self.import_catalog_rule(param).await.map_err(ErrorData::from)?;
+                let result = self
+                    .import_catalog_rule(param)
+                    .await
+                    .map_err(ErrorData::from)?;
                 let json_value = serde_json::to_value(&result)
                     .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))?;
                 Ok(CallToolResult::success(vec![Content::json(json_value)?]))
@@ -2996,7 +3074,8 @@ mod tests {
     async fn test_complex_pattern() {
         let service = AstGrepService::new();
         let param = SearchParam {
-            code: "function test(a, b) { return a + b; } function add(x, y) { return x + y; }".into(),
+            code: "function test(a, b) { return a + b; } function add(x, y) { return x + y; }"
+                .into(),
             pattern: "function $NAME($PARAM1, $PARAM2) { return $PARAM1 + $PARAM2; }".into(),
             language: "javascript".into(),
         };

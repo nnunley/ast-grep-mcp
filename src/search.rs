@@ -109,7 +109,7 @@ impl SearchService {
 
         let file_results: Vec<FileMatchResult> = sorted_files
             .into_iter()
-            .filter(|(path, _)| cursor_filter.as_ref().map_or(true, |start| path > start))
+            .filter(|(path, _)| cursor_filter.as_ref().is_none_or(|start| path > start))
             .filter_map(|(path_str, file_size)| {
                 // Read file and search for matches
                 std::fs::read_to_string(&path_str).ok().and_then(|content| {

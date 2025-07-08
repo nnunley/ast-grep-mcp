@@ -15,38 +15,17 @@ repos:
       - id: mixed-line-ending
         args: [--fix=lf]
 
-  # Rust formatting
-  - repo: local
+  # Rust formatting and linting
+  - repo: https://github.com/doublify/pre-commit-rust
+    rev: v1.0
     hooks:
-      - id: cargo-fmt
-        name: cargo fmt
-        entry: cargo fmt --
-        language: system
-        types: [rust]
-        pass_filenames: false
+      - id: fmt
+        args: ['--verbose', '--']
+      - id: cargo-check
+      - id: clippy
+        args: ['--all-targets', '--all-features', '--', '-D', 'warnings']
 
-  # Rust linting
-  - repo: local
-    hooks:
-      - id: cargo-clippy
-        name: cargo clippy
-        entry: cargo clippy --all-targets --all-features -- -D warnings
-        language: system
-        types: [rust]
-        pass_filenames: false
-
-  # Rust tests
-  - repo: local
-    hooks:
-      - id: cargo-test
-        name: cargo test
-        entry: cargo test
-        language: system
-        types: [rust]
-        pass_filenames: false
-        stages: [push]
-
-  # Security audit
+  # Security audit - use local hook for cargo-audit
   - repo: local
     hooks:
       - id: cargo-audit
@@ -54,4 +33,4 @@ repos:
         entry: cargo audit
         language: system
         pass_filenames: false
-        stages: [push]
+        stages: [pre-push]

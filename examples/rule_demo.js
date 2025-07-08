@@ -9,7 +9,7 @@ console.log("Another debug message");
 function example() {
     var localVar = "local variable";
     console.log(localVar);
-    
+
     // Some other console methods
     console.error("Error message");
     console.warn("Warning message");

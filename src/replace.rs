@@ -139,7 +139,7 @@ impl ReplaceService {
 
         for (path_str, path_buf, file_size) in sorted_files
             .into_iter()
-            .filter(|(path, _, _)| cursor_filter.as_ref().map_or(true, |start| path > start))
+            .filter(|(path, _, _)| cursor_filter.as_ref().is_none_or(|start| path > start))
         {
             // Read file content
             let content = match std::fs::read_to_string(&path_buf) {

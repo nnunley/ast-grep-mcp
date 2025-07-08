@@ -40,7 +40,7 @@ async fn test_rule_validation_json() {
     // Test valid JSON rule
     let json_rule = r#"{
         "id": "test-rule",
-        "language": "javascript", 
+        "language": "javascript",
         "message": "Found console.log",
         "severity": "warning",
         "rule": {

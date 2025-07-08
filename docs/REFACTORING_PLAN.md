@@ -51,12 +51,12 @@ pub enum Rule {
     Pattern(PatternRule),
     Kind(String),
     Regex(String),
-    
+
     // Composite rules
     All(Vec<Rule>),
     Any(Vec<Rule>),
     Not(Box<Rule>),
-    
+
     // Relational rules
     Inside {
         rule: Box<Rule>,
@@ -74,7 +74,7 @@ pub enum Rule {
         rule: Box<Rule>,
         stopby: Option<StopBy>,
     },
-    
+
     // Advanced matching
     Matches(String), // meta-variable constraint
 }

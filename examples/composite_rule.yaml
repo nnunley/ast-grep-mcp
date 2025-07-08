@@ -1,12 +1,12 @@
 # Example composite rule configuration (limited support)
 
 id: find-any-console-method
-language: javascript  
+language: javascript
 message: "Found console method usage"
 severity: info
 rule:
   any:
     - pattern: "console.log($ARG)"
-    - pattern: "console.error($ARG)" 
+    - pattern: "console.error($ARG)"
     - pattern: "console.warn($ARG)"
     - pattern: "console.debug($ARG)"
