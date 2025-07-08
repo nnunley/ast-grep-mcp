@@ -168,7 +168,7 @@ impl RuleEvaluator {
     ) -> Result<Vec<MatchResult>, ServiceError> {
         // Create a pattern that matches any node of the specified kind
         // This is a simplified implementation
-        let kind_pattern = format!("{}()", kind);
+        let kind_pattern = format!("{kind}()");
         let ast = AstGrep::new(code, lang);
 
         // Try to create a pattern for the kind
@@ -233,7 +233,7 @@ impl RuleEvaluator {
         pattern_str: &str,
         lang: Language,
     ) -> Result<Pattern, ServiceError> {
-        let cache_key = format!("{}:{}", lang, pattern_str);
+        let cache_key = format!("{lang}:{pattern_str}");
 
         // Try to get from cache first
         {

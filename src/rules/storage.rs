@@ -139,7 +139,7 @@ impl RuleStorage {
     }
 
     fn get_rule_file_path(&self, rule_id: &str) -> PathBuf {
-        self.rules_directory.join(format!("{}.yaml", rule_id))
+        self.rules_directory.join(format!("{rule_id}.yaml"))
     }
 
     fn load_rule_from_file(&self, path: &PathBuf) -> Result<RuleConfig, ServiceError> {

@@ -19,16 +19,16 @@ pub enum ServiceError {
 impl fmt::Display for ServiceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ServiceError::ParserError(msg) => write!(f, "Parser error: {}", msg),
-            ServiceError::Internal(msg) => write!(f, "Internal error: {}", msg),
-            ServiceError::Io(err) => write!(f, "IO error: {}", err),
-            ServiceError::WalkDir(err) => write!(f, "Directory traversal error: {}", err),
-            ServiceError::SerdeYaml(err) => write!(f, "YAML parsing error: {}", err),
-            ServiceError::SerdeJson(err) => write!(f, "JSON parsing error: {}", err),
-            ServiceError::Regex(err) => write!(f, "Regex error: {}", err),
+            ServiceError::ParserError(msg) => write!(f, "Parser error: {msg}"),
+            ServiceError::Internal(msg) => write!(f, "Internal error: {msg}"),
+            ServiceError::Io(err) => write!(f, "IO error: {err}"),
+            ServiceError::WalkDir(err) => write!(f, "Directory traversal error: {err}"),
+            ServiceError::SerdeYaml(err) => write!(f, "YAML parsing error: {err}"),
+            ServiceError::SerdeJson(err) => write!(f, "JSON parsing error: {err}"),
+            ServiceError::Regex(err) => write!(f, "Regex error: {err}"),
             ServiceError::FileNotFound(path) => write!(f, "File not found: {}", path.display()),
-            ServiceError::Glob(err) => write!(f, "Glob error: {}", err),
-            ServiceError::ToolNotFound(tool) => write!(f, "Tool not found: {}", tool),
+            ServiceError::Glob(err) => write!(f, "Glob error: {err}"),
+            ServiceError::ToolNotFound(tool) => write!(f, "Tool not found: {tool}"),
         }
     }
 }

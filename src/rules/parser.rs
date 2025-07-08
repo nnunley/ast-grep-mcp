@@ -28,7 +28,8 @@ pub fn validate_rule_config(content: &str) -> Result<Vec<String>, ServiceError> 
         Ok(rule) => {
             // Validate language
             if Language::from_str(&rule.language).is_err() {
-                errors.push(format!("Unsupported language: {}", rule.language));
+                let lang = &rule.language;
+                errors.push(format!("Unsupported language: {lang}"));
             }
 
             // Validate rule structure
@@ -43,14 +44,13 @@ pub fn validate_rule_config(content: &str) -> Result<Vec<String>, ServiceError> 
             if let Some(ref severity) = rule.severity {
                 if !matches!(severity.as_str(), "error" | "warning" | "info") {
                     errors.push(format!(
-                        "Invalid severity '{}'. Must be 'error', 'warning', or 'info'",
-                        severity
+                        "Invalid severity '{severity}'. Must be 'error', 'warning', or 'info'"
                     ));
                 }
             }
         }
         Err(e) => {
-            errors.push(format!("Failed to parse rule configuration: {}", e));
+            errors.push(format!("Failed to parse rule configuration: {e}"));
         }
     }
 

@@ -115,12 +115,12 @@ impl CatalogManager {
             Ok(_) => Ok(ImportCatalogRuleResult {
                 rule_id: rule_id.clone(),
                 imported: true,
-                message: format!("Successfully imported rule '{}' from catalog", rule_id),
+                message: format!("Successfully imported rule '{rule_id}' from catalog"),
             }),
             Err(e) => Ok(ImportCatalogRuleResult {
                 rule_id: rule_id.clone(),
                 imported: false,
-                message: format!("Failed to import rule: {}", e),
+                message: format!("Failed to import rule: {e}"),
             }),
         }
     }
