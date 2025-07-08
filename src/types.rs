@@ -83,7 +83,7 @@ pub struct FileSearchResult {
     pub total_files_found: usize,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileMatchResult {
     pub file_path: String,
     pub file_size_bytes: u64,
@@ -91,7 +91,7 @@ pub struct FileMatchResult {
     pub file_hash: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CursorResult {
     pub last_file_path: String,
     pub is_complete: bool,
