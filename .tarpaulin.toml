@@ -1,0 +1,16 @@
+[config]
+# Tarpaulin configuration for isolated coverage reports
+engine = "Llvm"
+out = ["Html", "Lcov"]
+output-dir = "coverage"
+follow-exec = true
+post-args = ["--ignore-panics"]
+
+[report]
+# Only generate reports for our source code
+include-tests = false
+exclude-files = [
+    "target/*",
+    "tests/*",
+    "examples/*",
+]
