@@ -2,6 +2,7 @@
 name = "ast-grep-mcp"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
 authors = ["Norman Nunley Jr <nnunley@gmail.com>"]
 description = "Model Context Protocol (MCP) server for ast-grep - structural code search and transformation"
 repository = "https://github.com/nnunley/ast-grep-mcp"

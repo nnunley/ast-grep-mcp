@@ -131,57 +131,53 @@ impl CatalogManager {
             "no-console-log" => {
                 format!(
                     r#"
-id: {}
+id: {rule_id}
 message: "Avoid using console.log in production code"
 language: javascript
 severity: warning
 rule:
   pattern: console.log($ARGS)
 fix: "// TODO: Replace with proper logging"
-"#,
-                    rule_id
+"#
                 )
             }
             "use-strict-equality" => {
                 format!(
                     r#"
-id: {}
+id: {rule_id}
 message: "Use strict equality (===) instead of loose equality (==)"
 language: javascript
 severity: warning
 rule:
   pattern: $A == $B
 fix: "$A === $B"
-"#,
-                    rule_id
+"#
                 )
             }
             "no-var-declarations" => {
                 format!(
                     r#"
-id: {}
+id: {rule_id}
 message: "Use let or const instead of var"
 language: javascript
 severity: warning
 rule:
   pattern: var $VAR = $VALUE;
 fix: "let $VAR = $VALUE;"
-"#,
-                    rule_id
+"#
                 )
             }
             _ => {
                 format!(
                     r#"
-id: {}
+id: {rule_id}
 message: "Imported rule from catalog"
 language: javascript
 severity: info
 rule:
   pattern: console.log($VAR)
 fix: "// TODO: Replace with proper logging: console.log($VAR)"
-"#,
-                    rule_id
+"#
                 )
             }
         }

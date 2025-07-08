@@ -1,1 +1,2 @@
 - When exploring solutions, put your code in one of examples/, tests/, or the source file being tested.
+- Format strings should include their variables inline using the syntax `{variable}` instead of positional arguments. For example, use `format!("Error: {error}")` instead of `format!("Error: {}", error)`. Note: `cargo clippy --fix` can automatically fix these issues.
