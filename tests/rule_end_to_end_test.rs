@@ -6,8 +6,12 @@ use tempfile::TempDir;
 
 fn create_test_service_with_examples() -> (AstGrepService, TempDir) {
     let temp_dir = TempDir::new().unwrap();
-    // The service uses default config, so we'll work with temp files in the temp directory
-    let service = AstGrepService::new();
+    // Create service with temp directory as root to isolate tests
+    let config = ast_grep_mcp::config::ServiceConfig {
+        root_directories: vec![temp_dir.path().to_path_buf()],
+        ..Default::default()
+    };
+    let service = AstGrepService::with_config(config);
 
     (service, temp_dir)
 }

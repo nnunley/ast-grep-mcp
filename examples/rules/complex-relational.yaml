@@ -4,7 +4,7 @@ severity: info
 language: javascript
 rule:
   all:
-    - pattern: function $NAME($ARGS) { $BODY }
+    - kind: method_definition
     - has:
         pattern: console.log($MSG)
     - inside:
