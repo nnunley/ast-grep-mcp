@@ -1,0 +1,7 @@
+id: python-fstring
+message: "Use f-strings instead of .format() for string formatting"
+severity: info
+language: python
+rule:
+  pattern: '"$STRING".format($ARGS)'
+fix: 'f"$STRING"'

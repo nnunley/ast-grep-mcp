@@ -1,0 +1,13 @@
+id: react-hook-deps
+message: "React hook may be missing dependencies"
+severity: warning
+language: typescript
+rule:
+  all:
+    - pattern: useEffect($CALLBACK, $DEPS)
+    - has:
+        pattern: $VAR
+        stopBy: end
+    - not:
+        inside:
+          pattern: $DEPS

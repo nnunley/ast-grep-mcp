@@ -1,0 +1,10 @@
+id: no-any-type
+message: "Avoid using 'any' type, prefer specific types"
+severity: error
+language: typescript
+rule:
+  any:
+    - pattern: "$VAR: any"
+    - pattern: "any[]"
+    - pattern: "function $FUNC($ARGS: any)"
+    - pattern: "($ARGS: any) => $RETURN"

@@ -1,0 +1,14 @@
+id: complex-relational
+message: "Complex example with relational rules"
+severity: info
+language: javascript
+rule:
+  all:
+    - pattern: function $NAME($ARGS) { $BODY }
+    - has:
+        pattern: console.log($MSG)
+    - inside:
+        pattern: class $CLASS { $METHODS }
+    - not:
+        has:
+          pattern: return $VALUE

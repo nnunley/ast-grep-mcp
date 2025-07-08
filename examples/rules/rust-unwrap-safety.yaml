@@ -1,0 +1,8 @@
+id: rust-unwrap-safety
+message: "Avoid using unwrap(), prefer proper error handling"
+severity: warning
+language: rust
+rule:
+  any:
+    - pattern: $EXPR.unwrap()
+    - pattern: $EXPR.expect($MSG)

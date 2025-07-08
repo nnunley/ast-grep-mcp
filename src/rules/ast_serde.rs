@@ -128,3 +128,239 @@ impl<'de> Deserialize<'de> for Rule {
         Ok(Rule::from(helper))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_deserialize_simple_pattern() {
+        let json_value = json!("console.log($VAR)");
+        let rule: Rule = serde_json::from_value(json_value).unwrap();
+
+        match rule {
+            Rule::Pattern(PatternRule::Simple { pattern }) => {
+                assert_eq!(pattern, "console.log($VAR)");
+            }
+            _ => panic!("Expected simple pattern rule"),
+        }
+    }
+
+    #[test]
+    fn test_deserialize_pattern_object() {
+        let json_value = json!({
+            "pattern": "console.log($VAR)"
+        });
+        let rule: Rule = serde_json::from_value(json_value).unwrap();
+
+        match rule {
+            Rule::Pattern(PatternRule::Simple { pattern }) => {
+                assert_eq!(pattern, "console.log($VAR)");
+            }
+            _ => panic!("Expected simple pattern rule"),
+        }
+    }
+
+    #[test]
+    fn test_deserialize_advanced_pattern() {
+        let json_value = json!({
+            "pattern": {
+                "context": "function $FUNC() { $$$ }",
+                "selector": "assignment_expression"
+            }
+        });
+        let rule: Rule = serde_json::from_value(json_value).unwrap();
+
+        match rule {
+            Rule::Pattern(PatternRule::Advanced {
+                pattern,
+                context,
+                selector,
+                ..
+            }) => {
+                assert_eq!(pattern, "function $FUNC() { $$$ }");
+                assert_eq!(context, Some("function $FUNC() { $$$ }".to_string()));
+                assert_eq!(selector, Some("assignment_expression".to_string()));
+            }
+            _ => panic!("Expected advanced pattern rule"),
+        }
+    }
+
+    #[test]
+    fn test_deserialize_kind_rule() {
+        let json_value = json!({
+            "kind": "function_declaration"
+        });
+        let rule: Rule = serde_json::from_value(json_value).unwrap();
+
+        match rule {
+            Rule::Kind(kind) => {
+                assert_eq!(kind, "function_declaration");
+            }
+            _ => panic!("Expected kind rule"),
+        }
+    }
+
+    #[test]
+    fn test_deserialize_regex_rule() {
+        let json_value = json!({
+            "regex": "TODO|FIXME"
+        });
+        let rule: Rule = serde_json::from_value(json_value).unwrap();
+
+        match rule {
+            Rule::Regex(regex) => {
+                assert_eq!(regex, "TODO|FIXME");
+            }
+            _ => panic!("Expected regex rule"),
+        }
+    }
+
+    #[test]
+    fn test_deserialize_matches_rule() {
+        let json_value = json!({
+            "matches": "rule-id"
+        });
+        let rule: Rule = serde_json::from_value(json_value).unwrap();
+
+        match rule {
+            Rule::Matches(matches) => {
+                assert_eq!(matches, "rule-id");
+            }
+            _ => panic!("Expected matches rule"),
+        }
+    }
+
+    #[test]
+    fn test_deserialize_all_rule() {
+        let json_value = json!({
+            "all": [
+                {"pattern": "console.log($VAR)"},
+                {"kind": "function_declaration"}
+            ]
+        });
+        let rule: Rule = serde_json::from_value(json_value).unwrap();
+
+        match rule {
+            Rule::All(rules) => {
+                assert_eq!(rules.len(), 2);
+                match &rules[0] {
+                    Rule::Pattern(PatternRule::Simple { pattern }) => {
+                        assert_eq!(pattern, "console.log($VAR)");
+                    }
+                    _ => panic!("Expected pattern rule"),
+                }
+                match &rules[1] {
+                    Rule::Kind(kind) => {
+                        assert_eq!(kind, "function_declaration");
+                    }
+                    _ => panic!("Expected kind rule"),
+                }
+            }
+            _ => panic!("Expected all rule"),
+        }
+    }
+
+    #[test]
+    fn test_deserialize_any_rule() {
+        let json_value = json!({
+            "any": [
+                {"pattern": "console.log($VAR)"},
+                {"pattern": "console.error($VAR)"}
+            ]
+        });
+        let rule: Rule = serde_json::from_value(json_value).unwrap();
+
+        match rule {
+            Rule::Any(rules) => {
+                assert_eq!(rules.len(), 2);
+            }
+            _ => panic!("Expected any rule"),
+        }
+    }
+
+    #[test]
+    fn test_deserialize_not_rule() {
+        let json_value = json!({
+            "not": {
+                "pattern": "console.log($VAR)"
+            }
+        });
+        let rule: Rule = serde_json::from_value(json_value).unwrap();
+
+        match rule {
+            Rule::Not(boxed_rule) => match boxed_rule.as_ref() {
+                Rule::Pattern(PatternRule::Simple { pattern }) => {
+                    assert_eq!(pattern, "console.log($VAR)");
+                }
+                _ => panic!("Expected pattern rule inside not"),
+            },
+            _ => panic!("Expected not rule"),
+        }
+    }
+
+    #[test]
+    fn test_deserialize_empty_object() {
+        let json_value = json!({});
+        let rule: Rule = serde_json::from_value(json_value).unwrap();
+
+        match rule {
+            Rule::All(rules) => {
+                assert!(rules.is_empty());
+            }
+            _ => panic!("Expected empty all rule for empty object"),
+        }
+    }
+
+    #[test]
+    fn test_relational_placeholder() {
+        let json_value = json!({
+            "pattern": "console.log($VAR)",
+            "inside": {
+                "pattern": "function $FUNC() { $$$ }"
+            }
+        });
+        let rule: Rule = serde_json::from_value(json_value).unwrap();
+
+        // This should be handled as a relational placeholder
+        match rule {
+            Rule::Pattern(PatternRule::Simple { pattern }) => {
+                assert_eq!(pattern, "RELATIONAL_PLACEHOLDER");
+            }
+            _ => panic!("Expected relational placeholder pattern"),
+        }
+    }
+
+    #[test]
+    fn test_yaml_deserialization() {
+        let yaml_str = r#"
+pattern: "console.log($VAR)"
+"#;
+        let rule: Rule = serde_yaml::from_str(yaml_str).unwrap();
+
+        match rule {
+            Rule::Pattern(PatternRule::Simple { pattern }) => {
+                assert_eq!(pattern, "console.log($VAR)");
+            }
+            _ => panic!("Expected simple pattern rule from YAML"),
+        }
+    }
+
+    #[test]
+    fn test_yaml_complex_rule() {
+        let yaml_str = r#"
+all:
+  - pattern: "console.log($VAR)"
+  - kind: "function_declaration"
+"#;
+        let rule: Rule = serde_yaml::from_str(yaml_str).unwrap();
+
+        match rule {
+            Rule::All(rules) => {
+                assert_eq!(rules.len(), 2);
+            }
+            _ => panic!("Expected all rule from YAML"),
+        }
+    }
+}

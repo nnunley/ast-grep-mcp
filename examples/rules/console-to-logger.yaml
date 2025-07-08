@@ -1,0 +1,7 @@
+id: console-to-logger
+message: "Replace console.log with proper logger"
+severity: warning
+language: javascript
+rule:
+  pattern: console.log($ARGS)
+fix: logger.log($ARGS)

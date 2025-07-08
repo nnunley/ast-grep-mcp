@@ -55,43 +55,9 @@ impl AstGrepService {
     }
 
     pub fn new() -> Self {
-        let config = ServiceConfig::default();
-        let cache_size = NonZeroUsize::new(config.pattern_cache_size)
-            .unwrap_or(NonZeroUsize::new(1000).unwrap());
-        let pattern_cache = Arc::new(Mutex::new(LruCache::new(cache_size)));
-        let pattern_matcher = PatternMatcher::with_cache(pattern_cache.clone());
-        let rule_evaluator = RuleEvaluator::new();
-        let search_service = SearchService::new(
-            config.clone(),
-            pattern_matcher.clone(),
-            rule_evaluator.clone(),
-        );
-        let replace_service = ReplaceService::new(
-            config.clone(),
-            pattern_matcher.clone(),
-            rule_evaluator.clone(),
-        );
-        let rule_storage = RuleStorage::new(config.rules_directory.clone());
-        let catalog_manager = CatalogManager::new();
-        let rule_service = RuleService::new(
-            config.clone(),
-            rule_evaluator.clone(),
-            rule_storage,
-            catalog_manager,
-        );
-
-        Self {
-            config,
-            pattern_cache,
-            pattern_matcher,
-            rule_evaluator,
-            search_service,
-            replace_service,
-            rule_service,
-        }
+        Self::with_config(ServiceConfig::default())
     }
 
-    #[allow(dead_code)]
     pub fn with_config(config: ServiceConfig) -> Self {
         let cache_size = NonZeroUsize::new(config.pattern_cache_size)
             .unwrap_or(NonZeroUsize::new(1000).unwrap());

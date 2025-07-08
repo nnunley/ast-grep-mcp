@@ -1,0 +1,6 @@
+id: no-nested-ternary
+message: "Avoid nested ternary operators for readability"
+severity: warning
+language: javascript
+rule:
+  pattern: "$COND ? ($INNER_COND ? $A : $B) : $C"

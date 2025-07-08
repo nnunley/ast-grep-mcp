@@ -19,6 +19,8 @@ path = "src/lib.rs"
 anyhow = "1.0.98"
 ast-grep-core = "0.38.6"
 ast-grep-language = "0.38.6"
+clap = { version = "4.5", features = ["derive"] }
+dirs = "5.0"
 async-trait = "0.1.88"
 globset = "0.4.16"
 rmcp = { version = "0.1.5", features = ["macros", "transport-io"] }
