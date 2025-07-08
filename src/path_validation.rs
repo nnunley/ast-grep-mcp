@@ -116,8 +116,10 @@ mod tests {
         std::fs::write(&valid_path, "test").unwrap();
         assert!(validate_path_within_roots(&valid_path, &roots).is_ok());
 
-        // Path outside root
-        let outside_path = temp_dir.path().join("../outside.txt");
+        // Path outside root - create another temp dir to ensure it's outside
+        let other_temp = TempDir::new().unwrap();
+        let outside_path = other_temp.path().join("outside.txt");
+        std::fs::write(&outside_path, "test").unwrap();
         assert!(validate_path_within_roots(&outside_path, &roots).is_err());
     }
 
