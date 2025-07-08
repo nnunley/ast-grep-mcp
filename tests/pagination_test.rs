@@ -15,8 +15,8 @@ async fn test_file_search_pagination_basic() {
 
     // Create 10 test files
     for i in 0..10 {
-        let file_path = temp_dir.path().join(format!("test{:02}.js", i));
-        fs::write(&file_path, format!("console.log('file {}');", i)).unwrap();
+        let file_path = temp_dir.path().join(format!("test{i:02}.js"));
+        fs::write(&file_path, format!("console.log('file {i}');")).unwrap();
     }
 
     // Search with small page size
@@ -139,7 +139,7 @@ async fn test_file_replace_pagination() {
 
     // Create 5 test files
     for i in 0..5 {
-        let file_path = temp_dir.path().join(format!("test{}.js", i));
+        let file_path = temp_dir.path().join(format!("test{i}.js"));
         fs::write(&file_path, "const x = 5; const y = 10;").unwrap();
     }
 
@@ -200,7 +200,7 @@ async fn test_pagination_with_no_matches() {
 
     // Create files without matches
     for i in 0..5 {
-        let file_path = temp_dir.path().join(format!("test{}.js", i));
+        let file_path = temp_dir.path().join(format!("test{i}.js"));
         fs::write(&file_path, "alert('hello');").unwrap();
     }
 
@@ -230,8 +230,8 @@ async fn test_pagination_consistency() {
 
     // Create files with predictable names for consistent ordering
     for i in 0..20 {
-        let file_path = temp_dir.path().join(format!("file_{:03}.js", i));
-        fs::write(&file_path, format!("console.log('test {}');", i)).unwrap();
+        let file_path = temp_dir.path().join(format!("file_{i:03}.js"));
+        fs::write(&file_path, format!("console.log('test {i}');")).unwrap();
     }
 
     // Get all results with large page size
@@ -285,8 +285,7 @@ async fn test_pagination_consistency() {
     {
         assert_eq!(
             paginated.file_path, all.file_path,
-            "Mismatch at position {}",
-            i
+            "Mismatch at position {i}"
         );
     }
 }

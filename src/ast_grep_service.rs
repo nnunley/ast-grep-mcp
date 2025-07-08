@@ -140,10 +140,10 @@ impl AstGrepService {
         let cache_key = format!("{}:{}", lang as u8, pattern_str);
 
         // First try to get from cache
-        if let Ok(mut cache) = self.pattern_cache.lock() {
-            if let Some(pattern) = cache.get(&cache_key) {
-                return Ok(pattern.clone());
-            }
+        if let Ok(mut cache) = self.pattern_cache.lock()
+            && let Some(pattern) = cache.get(&cache_key)
+        {
+            return Ok(pattern.clone());
         }
 
         // Pattern not in cache, create it
@@ -205,7 +205,7 @@ impl AstGrepService {
         if node.children().count() == 0 || node_text.len() <= 50 {
             let escaped_text = node_text.replace('\n', "\\n").replace('\r', "\\r");
             if !escaped_text.trim().is_empty() {
-                result.push_str(&format!(" \"{}\"", escaped_text));
+                result.push_str(&format!(" \"{escaped_text}\""));
             }
         }
 
@@ -227,10 +227,7 @@ impl AstGrepService {
 
         // If YAML fails, try JSON
         serde_json::from_str::<RuleConfig>(rule_config_str).map_err(|e| {
-            ServiceError::ParserError(format!(
-                "Failed to parse rule config as YAML or JSON: {}",
-                e
-            ))
+            ServiceError::ParserError(format!("Failed to parse rule config as YAML or JSON: {e}"))
         })
     }
 
@@ -1415,43 +1412,41 @@ Always check the response for error conditions before processing results.
         }
 
         // If test code is provided, test the rule against it
-        if let Some(test_code) = param.test_code {
-            if errors.is_empty() {
-                if let Some(pattern_str) = self.extract_pattern_from_rule(&config.rule) {
-                    match self.parse_language(&config.language) {
-                        Ok(_lang) => {
-                            let search_param = SearchParam {
-                                code: test_code,
-                                pattern: pattern_str,
-                                language: config.language.clone(),
-                            };
+        if let Some(ref test_code) = param.test_code
+            && errors.is_empty()
+            && let Some(pattern_str) = self.extract_pattern_from_rule(&config.rule)
+        {
+            match self.parse_language(&config.language) {
+                Ok(_lang) => {
+                    let search_param = SearchParam {
+                        code: test_code.clone(),
+                        pattern: pattern_str,
+                        language: config.language.clone(),
+                    };
 
-                            match self.search(search_param).await {
-                                Ok(result) => {
-                                    test_matches = Some(RuleTestResult {
-                                        matches_found: result.matches.len(),
-                                        sample_matches: result
-                                            .matches
-                                            .into_iter()
-                                            .take(5)
-                                            .map(|m| m.text)
-                                            .collect(),
-                                    });
-                                }
-                                Err(e) => {
-                                    warnings.push(format!("Pattern test failed: {e}"));
-                                }
-                            }
+                    match self.search(search_param).await {
+                        Ok(result) => {
+                            test_matches = Some(RuleTestResult {
+                                matches_found: result.matches.len(),
+                                sample_matches: result
+                                    .matches
+                                    .into_iter()
+                                    .take(5)
+                                    .map(|m| m.text)
+                                    .collect(),
+                            });
                         }
                         Err(e) => {
-                            errors.push(e.to_string());
+                            warnings.push(format!("Pattern test failed: {e}"));
                         }
                     }
-                } else {
-                    warnings
-                        .push("Complex rule detected - basic pattern testing not available".into());
+                }
+                Err(e) => {
+                    errors.push(e.to_string());
                 }
             }
+        } else if param.test_code.is_some() && !errors.is_empty() {
+            warnings.push("Test code provided but rule has errors".into());
         }
 
         Ok(RuleValidateResult {

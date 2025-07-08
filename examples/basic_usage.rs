@@ -18,7 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (i, match_result) in result.matches.iter().enumerate() {
         println!("  {}. {}", i + 1, match_result.text);
         for (var, value) in &match_result.vars {
-            println!("     ${} = {}", var, value);
+            println!("     ${var} = {value}");
         }
     }
 
