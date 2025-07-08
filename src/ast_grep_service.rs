@@ -9,11 +9,9 @@ use crate::types::*;
 
 use lru::LruCache;
 use std::num::NonZeroUsize;
-use std::{
-    borrow::Cow, collections::HashMap, fs, path::PathBuf, str::FromStr, sync::Arc, sync::Mutex,
-};
+use std::{borrow::Cow, fs, path::PathBuf, str::FromStr, sync::Arc, sync::Mutex};
 
-use ast_grep_core::{AstGrep, Pattern, Position, tree_sitter::StrDoc};
+use ast_grep_core::{AstGrep, Pattern};
 use ast_grep_language::SupportLang as Language;
 // Removed unused base64 import
 use rmcp::{
@@ -33,6 +31,8 @@ pub struct AstGrepService {
     pattern_cache: Arc<Mutex<LruCache<String, Pattern>>>,
     #[allow(dead_code)]
     pattern_matcher: PatternMatcher,
+    #[allow(dead_code)]
+    rule_evaluator: RuleEvaluator,
     #[allow(dead_code)]
     search_service: SearchService,
     #[allow(dead_code)]
@@ -83,6 +83,7 @@ impl AstGrepService {
             config,
             pattern_cache,
             pattern_matcher,
+            rule_evaluator,
             search_service,
             replace_service,
             rule_service,
@@ -119,6 +120,7 @@ impl AstGrepService {
             config,
             pattern_cache,
             pattern_matcher,
+            rule_evaluator,
             search_service,
             replace_service,
             rule_service,
@@ -132,6 +134,7 @@ impl AstGrepService {
         format!("sha256:{}", hex::encode(hasher.finalize()))
     }
 
+    #[allow(dead_code)]
     fn get_or_create_pattern(
         &self,
         pattern_str: &str,
@@ -314,494 +317,6 @@ impl AstGrepService {
         patterns
     }
 
-    #[allow(dead_code)]
-    fn evaluate_rule_against_code(
-        &self,
-        rule: &RuleObject,
-        code: &str,
-        lang: Language,
-    ) -> Result<Vec<MatchResult>, ServiceError> {
-        // Handle different rule types
-        if let Some(pattern_spec) = &rule.pattern {
-            // Simple pattern rule
-            self.evaluate_pattern_rule(pattern_spec, code, lang)
-        } else if let Some(all_rules) = &rule.all {
-            // ALL composite rule - node must match ALL sub-rules
-            self.evaluate_all_rule(all_rules, code, lang)
-        } else if let Some(any_rules) = &rule.any {
-            // ANY composite rule - node must match ANY sub-rule
-            self.evaluate_any_rule(any_rules, code, lang)
-        } else if let Some(not_rule) = &rule.not {
-            // NOT composite rule - find nodes that DON'T match the sub-rule
-            self.evaluate_not_rule(not_rule, code, lang)
-        } else if let Some(kind) = &rule.kind {
-            // Kind rule - match nodes by AST kind (simplified implementation)
-            self.evaluate_kind_rule(kind, code, lang)
-        } else if let Some(regex) = &rule.regex {
-            // Regex rule - match nodes by text content
-            self.evaluate_regex_rule(regex, code, lang)
-        } else if let Some(inside_rule) = &rule.inside {
-            // Inside relational rule - match nodes inside another pattern
-            self.evaluate_inside_rule(inside_rule, code, lang)
-        } else if let Some(has_rule) = &rule.has {
-            // Has relational rule - match nodes that contain another pattern
-            self.evaluate_has_rule(has_rule, code, lang)
-        } else if let Some(follows_rule) = &rule.follows {
-            // Follows relational rule - match nodes that follow another pattern
-            self.evaluate_follows_rule(follows_rule, code, lang)
-        } else if let Some(precedes_rule) = &rule.precedes {
-            // Precedes relational rule - match nodes that precede another pattern
-            self.evaluate_precedes_rule(precedes_rule, code, lang)
-        } else {
-            Err(ServiceError::ParserError(
-                "Rule must have at least one condition".into(),
-            ))
-        }
-    }
-
-    #[allow(dead_code)]
-    fn evaluate_pattern_rule(
-        &self,
-        pattern_spec: &PatternSpec,
-        code: &str,
-        lang: Language,
-    ) -> Result<Vec<MatchResult>, ServiceError> {
-        let pattern_str = match pattern_spec {
-            PatternSpec::Simple(pattern) => pattern.clone(),
-            PatternSpec::Advanced { context, .. } => context.clone(),
-        };
-
-        let ast = AstGrep::new(code, lang);
-        let pattern = self.get_or_create_pattern(&pattern_str, lang)?;
-
-        let matches: Vec<MatchResult> = ast
-            .root()
-            .find_all(pattern)
-            .map(|node| {
-                let vars: HashMap<String, String> = node.get_env().clone().into();
-                let start_pos: Position = node.get_node().start_pos();
-                let end_pos: Position = node.get_node().end_pos();
-                MatchResult {
-                    text: node.text().to_string(),
-                    vars,
-                    start_line: start_pos.line(),
-                    end_line: end_pos.line(),
-                    start_col: start_pos.column(&node),
-                    end_col: end_pos.column(&node),
-                }
-            })
-            .collect();
-
-        Ok(matches)
-    }
-
-    #[allow(dead_code)]
-    fn evaluate_kind_rule(
-        &self,
-        _kind: &str,
-        code: &str,
-        lang: Language,
-    ) -> Result<Vec<MatchResult>, ServiceError> {
-        // For now, use a simple pattern that matches any node
-        // This is a placeholder - proper kind matching would require deeper AST integration
-        let ast = AstGrep::new(code, lang);
-
-        // Create a pattern that matches anything and then filter by examining the AST
-        // This is a simplified approach
-        let pattern = Pattern::new("$_", lang);
-        // node.get_node() has access to most relational operators for syntax nodes.
-
-        let matches: Vec<MatchResult> = ast
-            .root()
-            .find_all(pattern)
-            .map(|node| {
-                // Check if node kind matches (this is approximate)
-                // Note: Direct kind checking may not be available, so we'll use text matching as fallback
-                let text = node.text().to_string();
-                let vars: HashMap<String, String> = node.get_env().clone().into();
-                // For now, include all matches since we can't easily check AST node kind
-                // This is a simplified implementation
-                // TODO: Implement proper position extraction from node.range()
-                MatchResult {
-                    text: text.clone(),
-                    vars,
-                    start_line: 1,
-                    end_line: 1,
-                    start_col: 0,
-                    end_col: text.len(),
-                }
-            })
-            .collect();
-
-        Ok(matches)
-    }
-
-    #[allow(dead_code)]
-    fn evaluate_regex_rule(
-        &self,
-        regex_pattern: &str,
-        code: &str,
-        _lang: Language,
-    ) -> Result<Vec<MatchResult>, ServiceError> {
-        use std::str::FromStr;
-
-        // Create regex
-        let regex = regex::Regex::from_str(regex_pattern)
-            .map_err(|e| ServiceError::ParserError(format!("Invalid regex pattern: {e}")))?;
-
-        let mut matches = Vec::new();
-
-        // Find all matches in the code
-        for mat in regex.find_iter(code) {
-            // Calculate line and column positions from byte offsets
-            let start_byte = mat.start();
-            let end_byte = mat.end();
-            let (start_line, start_col) = self.byte_offset_to_line_col(code, start_byte);
-            let (end_line, end_col) = self.byte_offset_to_line_col(code, end_byte);
-
-            matches.push(MatchResult {
-                text: mat.as_str().to_string(),
-                vars: HashMap::new(),
-                start_line,
-                end_line,
-                start_col,
-                end_col,
-            });
-        }
-
-        Ok(matches)
-    }
-
-    // Relational rule evaluation methods
-
-    #[allow(dead_code)]
-    fn evaluate_inside_rule(
-        &self,
-        inside_rule: &RuleObject,
-        code: &str,
-        lang: Language,
-    ) -> Result<Vec<MatchResult>, ServiceError> {
-        let ast = AstGrep::new(code, lang);
-
-        // Get matches for the container pattern
-        let container_matches = self.evaluate_rule_against_code(inside_rule, code, lang)?;
-
-        // Get all possible target matches (from the main pattern in the parent rule)
-        // For now, we'll search for a generic pattern to find candidate nodes
-        let all_nodes = self.get_all_nodes(&ast, lang)?;
-
-        let mut inside_matches = Vec::new();
-
-        // Check which nodes are inside the container matches
-        for node in all_nodes {
-            for container in &container_matches {
-                if self.is_node_inside(&node, container) {
-                    inside_matches.push(node);
-                    break;
-                }
-            }
-        }
-
-        Ok(inside_matches)
-    }
-
-    #[allow(dead_code)]
-    fn evaluate_has_rule(
-        &self,
-        has_rule: &RuleObject,
-        code: &str,
-        lang: Language,
-    ) -> Result<Vec<MatchResult>, ServiceError> {
-        let ast = AstGrep::new(code, lang);
-
-        // Get matches for the child pattern we're looking for
-        let child_matches = self.evaluate_rule_against_code(has_rule, code, lang)?;
-
-        if child_matches.is_empty() {
-            return Ok(vec![]);
-        }
-
-        // Get all possible parent nodes
-        let all_nodes = self.get_all_nodes(&ast, lang)?;
-
-        let mut has_matches = Vec::new();
-
-        // Check which nodes contain the child matches
-        for node in all_nodes {
-            for child in &child_matches {
-                if self.node_contains(&node, child) {
-                    if !has_matches
-                        .iter()
-                        .any(|m: &MatchResult| m.text == node.text)
-                    {
-                        has_matches.push(node.clone());
-                    }
-                    break;
-                }
-            }
-        }
-
-        Ok(has_matches)
-    }
-
-    #[allow(dead_code)]
-    fn evaluate_follows_rule(
-        &self,
-        follows_rule: &RuleObject,
-        code: &str,
-        lang: Language,
-    ) -> Result<Vec<MatchResult>, ServiceError> {
-        let ast = AstGrep::new(code, lang);
-
-        // Get matches for the preceding pattern
-        let preceding_matches = self.evaluate_rule_against_code(follows_rule, code, lang)?;
-
-        if preceding_matches.is_empty() {
-            return Ok(vec![]);
-        }
-
-        // Get all possible nodes that could follow
-        let all_nodes = self.get_all_nodes(&ast, lang)?;
-
-        let mut follows_matches = Vec::new();
-
-        // Check which nodes follow the preceding matches
-        for node in all_nodes {
-            for preceding in &preceding_matches {
-                if self.node_follows(&node, preceding) {
-                    follows_matches.push(node);
-                    break;
-                }
-            }
-        }
-
-        Ok(follows_matches)
-    }
-
-    #[allow(dead_code)]
-    fn evaluate_precedes_rule(
-        &self,
-        precedes_rule: &RuleObject,
-        code: &str,
-        lang: Language,
-    ) -> Result<Vec<MatchResult>, ServiceError> {
-        let ast = AstGrep::new(code, lang);
-
-        // Get matches for the following pattern
-        let following_matches = self.evaluate_rule_against_code(precedes_rule, code, lang)?;
-
-        if following_matches.is_empty() {
-            return Ok(vec![]);
-        }
-
-        // Get all possible nodes that could precede
-        let all_nodes = self.get_all_nodes(&ast, lang)?;
-
-        let mut precedes_matches = Vec::new();
-
-        // Check which nodes precede the following matches
-        for node in all_nodes {
-            for following in &following_matches {
-                if self.node_precedes(&node, following) {
-                    precedes_matches.push(node);
-                    break;
-                }
-            }
-        }
-
-        Ok(precedes_matches)
-    }
-
-    // Helper methods for relational evaluation
-
-    #[allow(dead_code)]
-    fn get_all_nodes(
-        &self,
-        ast: &AstGrep<StrDoc<Language>>,
-        lang: Language,
-    ) -> Result<Vec<MatchResult>, ServiceError> {
-        // Use a catch-all pattern to get all significant nodes
-        let pattern = self.get_or_create_pattern("$_", lang)?;
-
-        let matches: Vec<MatchResult> = ast
-            .root()
-            .find_all(pattern)
-            .map(|node| {
-                let vars: HashMap<String, String> = node.get_env().clone().into();
-                let text = node.text().to_string();
-                // TODO: Implement proper position extraction from node.range()
-                MatchResult {
-                    text: text.clone(),
-                    vars,
-                    start_line: 1,
-                    end_line: 1,
-                    start_col: 0,
-                    end_col: text.len(),
-                }
-            })
-            .collect();
-
-        Ok(matches)
-    }
-
-    #[allow(dead_code)]
-    fn is_node_inside(&self, node: &MatchResult, container: &MatchResult) -> bool {
-        // Check if node is spatially inside container
-        node.start_line >= container.start_line
-            && node.end_line <= container.end_line
-            && (node.start_line > container.start_line || node.start_col >= container.start_col)
-            && (node.end_line < container.end_line || node.end_col <= container.end_col)
-            && !(node.start_line == container.start_line
-                && node.start_col == container.start_col
-                && node.end_line == container.end_line
-                && node.end_col == container.end_col)
-    }
-
-    #[allow(dead_code)]
-    fn node_contains(&self, parent: &MatchResult, child: &MatchResult) -> bool {
-        // Check if parent spatially contains child
-        self.is_node_inside(child, parent)
-    }
-
-    #[allow(dead_code)]
-    fn node_follows(&self, node: &MatchResult, preceding: &MatchResult) -> bool {
-        // Check if node comes after preceding node
-        node.start_line > preceding.end_line
-            || (node.start_line == preceding.end_line && node.start_col >= preceding.end_col)
-    }
-
-    #[allow(dead_code)]
-    fn node_precedes(&self, node: &MatchResult, following: &MatchResult) -> bool {
-        // Check if node comes before following node
-        node.end_line < following.start_line
-            || (node.end_line == following.start_line && node.end_col <= following.start_col)
-    }
-
-    #[allow(dead_code)]
-    fn byte_offset_to_line_col(&self, code: &str, byte_offset: usize) -> (usize, usize) {
-        let mut line = 1;
-        let mut col = 0;
-
-        for (i, ch) in code.char_indices() {
-            if i >= byte_offset {
-                break;
-            }
-            if ch == '\n' {
-                line += 1;
-                col = 0;
-            } else {
-                col += 1;
-            }
-        }
-
-        (line, col)
-    }
-
-    #[allow(dead_code)]
-    fn evaluate_all_rule(
-        &self,
-        all_rules: &[RuleObject],
-        code: &str,
-        lang: Language,
-    ) -> Result<Vec<MatchResult>, ServiceError> {
-        if all_rules.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        // Start with matches from the first rule
-        let mut current_matches = self.evaluate_rule_against_code(&all_rules[0], code, lang)?;
-
-        // For each additional rule, filter current matches to only those that also match the new rule
-        for rule in &all_rules[1..] {
-            let rule_matches = self.evaluate_rule_against_code(rule, code, lang)?;
-
-            // Keep only matches that appear in both sets (intersection)
-            current_matches = self.intersect_matches(current_matches, rule_matches);
-        }
-
-        Ok(current_matches)
-    }
-
-    #[allow(dead_code)]
-    fn evaluate_any_rule(
-        &self,
-        any_rules: &[RuleObject],
-        code: &str,
-        lang: Language,
-    ) -> Result<Vec<MatchResult>, ServiceError> {
-        let mut all_matches = Vec::new();
-
-        // Collect matches from all rules
-        for rule in any_rules {
-            let mut rule_matches = self.evaluate_rule_against_code(rule, code, lang)?;
-            all_matches.append(&mut rule_matches);
-        }
-
-        // Remove duplicates by text (simple deduplication)
-        all_matches.sort_by(|a, b| a.text.cmp(&b.text));
-        all_matches.dedup_by(|a, b| a.text == b.text);
-
-        Ok(all_matches)
-    }
-
-    #[allow(dead_code)]
-    fn evaluate_not_rule(
-        &self,
-        not_rule: &RuleObject,
-        code: &str,
-        lang: Language,
-    ) -> Result<Vec<MatchResult>, ServiceError> {
-        // This is complex - we need to find all nodes that DON'T match the rule
-        // For now, implement a simplified approach using text analysis
-
-        let excluded_matches = self.evaluate_rule_against_code(not_rule, code, lang)?;
-        let excluded_texts: std::collections::HashSet<String> =
-            excluded_matches.iter().map(|m| m.text.clone()).collect();
-
-        // Get all possible tokens/expressions and filter out the excluded ones
-        let ast = AstGrep::new(code, lang);
-        let pattern = Pattern::new("$_", lang); // Match anything
-
-        let filtered_matches: Vec<MatchResult> = ast
-            .root()
-            .find_all(pattern)
-            .filter_map(|node| {
-                let text = node.text().to_string();
-                if !excluded_texts.contains(&text) {
-                    let vars: HashMap<String, String> = node.get_env().clone().into();
-                    // TODO: Implement proper position extraction from node.range()
-                    Some(MatchResult {
-                        text: text.clone(),
-                        vars,
-                        start_line: 1,
-                        end_line: 1,
-                        start_col: 0,
-                        end_col: text.len(),
-                    })
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        Ok(filtered_matches)
-    }
-
-    #[allow(dead_code)]
-    fn intersect_matches(
-        &self,
-        matches1: Vec<MatchResult>,
-        matches2: Vec<MatchResult>,
-    ) -> Vec<MatchResult> {
-        let texts2: std::collections::HashSet<String> =
-            matches2.iter().map(|m| m.text.clone()).collect();
-
-        matches1
-            .into_iter()
-            .filter(|m| texts2.contains(&m.text))
-            .collect()
-    }
-
     #[tracing::instrument(skip(self), fields(language = %param.language, pattern = %param.pattern))]
     pub async fn search(&self, param: SearchParam) -> Result<SearchResult, ServiceError> {
         let result = self.search_service.search(param).await?;
@@ -822,10 +337,12 @@ impl AstGrepService {
 
     #[tracing::instrument(skip(self), fields(language = %param.language, pattern = %param.pattern, replacement = %param.replacement))]
     pub async fn replace(&self, param: ReplaceParam) -> Result<ReplaceResult, ServiceError> {
-        self.replace_service.replace(param).await
+        let result = self.replace_service.replace(param).await?;
+        tracing::Span::current().record("changes_made", result.changes.len());
+        Ok(result)
     }
 
-    #[tracing::instrument(skip(self), fields(language = %param.language, pattern = %param.pattern, replacement = %param.replacement, path_pattern = %param.path_pattern, dry_run = %param.dry_run, summary_only = %param.summary_only))]
+    #[tracing::instrument(skip(self), fields(language = %param.language, pattern = %param.pattern, path_pattern = %param.path_pattern, replacement = %param.replacement, dry_run = %param.dry_run))]
     pub async fn file_replace(
         &self,
         param: FileReplaceParam,

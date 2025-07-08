@@ -50,6 +50,18 @@ impl RuleEvaluator {
         } else if let Some(regex) = &rule.regex {
             // Regex rule - match nodes by text content
             self.evaluate_regex_rule(regex, code, lang)
+        } else if let Some(inside_rule) = &rule.inside {
+            // Inside relational rule - match nodes inside another pattern
+            self.evaluate_inside_rule(inside_rule, code, lang)
+        } else if let Some(has_rule) = &rule.has {
+            // Has relational rule - match nodes that contain another pattern
+            self.evaluate_has_rule(has_rule, code, lang)
+        } else if let Some(follows_rule) = &rule.follows {
+            // Follows relational rule - match nodes that follow another pattern
+            self.evaluate_follows_rule(follows_rule, code, lang)
+        } else if let Some(precedes_rule) = &rule.precedes {
+            // Precedes relational rule - match nodes that precede another pattern
+            self.evaluate_precedes_rule(precedes_rule, code, lang)
         } else {
             Err(ServiceError::ParserError(
                 "Rule must have at least one condition".into(),
@@ -271,5 +283,57 @@ impl RuleEvaluator {
                 })
             })
             .collect()
+    }
+
+    fn evaluate_inside_rule(
+        &self,
+        _inside_rule: &RuleObject,
+        _code: &str,
+        _lang: Language,
+    ) -> Result<Vec<MatchResult>, ServiceError> {
+        // TODO: Implement inside rule evaluation using proper AST node relationships
+        // This requires understanding the exact ast-grep rule syntax
+        Err(ServiceError::ParserError(
+            "Inside rule evaluation not yet implemented".into(),
+        ))
+    }
+
+    fn evaluate_has_rule(
+        &self,
+        _has_rule: &RuleObject,
+        _code: &str,
+        _lang: Language,
+    ) -> Result<Vec<MatchResult>, ServiceError> {
+        // TODO: Implement has rule evaluation using proper AST node relationships
+        // This requires understanding the exact ast-grep rule syntax
+        Err(ServiceError::ParserError(
+            "Has rule evaluation not yet implemented".into(),
+        ))
+    }
+
+    fn evaluate_follows_rule(
+        &self,
+        _follows_rule: &RuleObject,
+        _code: &str,
+        _lang: Language,
+    ) -> Result<Vec<MatchResult>, ServiceError> {
+        // TODO: Implement follows rule evaluation using proper AST node relationships
+        // This requires understanding the exact ast-grep rule syntax
+        Err(ServiceError::ParserError(
+            "Follows rule evaluation not yet implemented".into(),
+        ))
+    }
+
+    fn evaluate_precedes_rule(
+        &self,
+        _precedes_rule: &RuleObject,
+        _code: &str,
+        _lang: Language,
+    ) -> Result<Vec<MatchResult>, ServiceError> {
+        // TODO: Implement precedes rule evaluation using proper AST node relationships
+        // This requires understanding the exact ast-grep rule syntax
+        Err(ServiceError::ParserError(
+            "Precedes rule evaluation not yet implemented".into(),
+        ))
     }
 }
