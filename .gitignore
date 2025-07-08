@@ -21,4 +21,6 @@ Thumbs.db
 .env.local
 .docs-cache
 .claude
-.cursor
+.cursor*.db
+*.db-shm
+*.db-wal
