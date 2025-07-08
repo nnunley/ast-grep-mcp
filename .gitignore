@@ -24,3 +24,8 @@ Thumbs.db
 .cursor*.db
 *.db-shm
 *.db-wal
+
+# Coverage reports
+coverage/
+lcov.info
+cobertura.xml
