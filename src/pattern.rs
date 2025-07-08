@@ -2,18 +2,20 @@ use crate::errors::ServiceError;
 use crate::types::MatchResult;
 use ast_grep_core::{AstGrep, Pattern};
 use ast_grep_language::SupportLang as Language;
-use std::collections::HashMap;
+use lru::LruCache;
+use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone)]
 pub struct PatternMatcher {
-    pattern_cache: Arc<Mutex<HashMap<String, Pattern>>>,
+    pattern_cache: Arc<Mutex<LruCache<String, Pattern>>>,
 }
 
 impl Default for PatternMatcher {
     fn default() -> Self {
+        let cache_size = NonZeroUsize::new(1000).unwrap(); // Default cache size
         Self {
-            pattern_cache: Arc::new(Mutex::new(HashMap::new())),
+            pattern_cache: Arc::new(Mutex::new(LruCache::new(cache_size))),
         }
     }
 }
@@ -23,13 +25,13 @@ impl PatternMatcher {
         Self::default()
     }
 
-    pub fn with_cache(cache: Arc<Mutex<HashMap<String, Pattern>>>) -> Self {
+    pub fn with_cache(cache: Arc<Mutex<LruCache<String, Pattern>>>) -> Self {
         Self {
             pattern_cache: cache,
         }
     }
 
-    pub fn get_cache(&self) -> Arc<Mutex<HashMap<String, Pattern>>> {
+    pub fn get_cache(&self) -> Arc<Mutex<LruCache<String, Pattern>>> {
         self.pattern_cache.clone()
     }
 
@@ -87,7 +89,7 @@ impl PatternMatcher {
 
         // Try to get from cache first
         {
-            let cache = self.pattern_cache.lock().unwrap();
+            let mut cache = self.pattern_cache.lock().unwrap();
             if let Some(pattern) = cache.get(&cache_key) {
                 return Ok(pattern.clone());
             }
@@ -99,7 +101,7 @@ impl PatternMatcher {
         // Store in cache
         {
             let mut cache = self.pattern_cache.lock().unwrap();
-            cache.insert(cache_key, pattern.clone());
+            cache.put(cache_key, pattern.clone());
         }
 
         Ok(pattern)

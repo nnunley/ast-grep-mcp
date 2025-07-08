@@ -61,7 +61,7 @@ impl AstGrepService {
         let cache_size = NonZeroUsize::new(config.pattern_cache_size)
             .unwrap_or(NonZeroUsize::new(1000).unwrap());
         let pattern_cache = Arc::new(Mutex::new(LruCache::new(cache_size)));
-        let pattern_matcher = PatternMatcher::new();
+        let pattern_matcher = PatternMatcher::with_cache(pattern_cache.clone());
         let rule_evaluator = RuleEvaluator::new();
         let search_service = SearchService::new(
             config.clone(),
@@ -97,7 +97,7 @@ impl AstGrepService {
         let cache_size = NonZeroUsize::new(config.pattern_cache_size)
             .unwrap_or(NonZeroUsize::new(1000).unwrap());
         let pattern_cache = Arc::new(Mutex::new(LruCache::new(cache_size)));
-        let pattern_matcher = PatternMatcher::new();
+        let pattern_matcher = PatternMatcher::with_cache(pattern_cache.clone());
         let rule_evaluator = RuleEvaluator::new();
         let search_service = SearchService::new(
             config.clone(),
@@ -318,6 +318,7 @@ impl AstGrepService {
         patterns
     }
 
+    #[allow(dead_code)]
     fn evaluate_rule_against_code(
         &self,
         rule: &RuleObject,
@@ -362,6 +363,7 @@ impl AstGrepService {
         }
     }
 
+    #[allow(dead_code)]
     fn evaluate_pattern_rule(
         &self,
         pattern_spec: &PatternSpec,
@@ -397,6 +399,7 @@ impl AstGrepService {
         Ok(matches)
     }
 
+    #[allow(dead_code)]
     fn evaluate_kind_rule(
         &self,
         _kind: &str,
@@ -437,6 +440,7 @@ impl AstGrepService {
         Ok(matches)
     }
 
+    #[allow(dead_code)]
     fn evaluate_regex_rule(
         &self,
         regex_pattern: &str,
@@ -474,6 +478,7 @@ impl AstGrepService {
 
     // Relational rule evaluation methods
 
+    #[allow(dead_code)]
     fn evaluate_inside_rule(
         &self,
         inside_rule: &RuleObject,
@@ -504,6 +509,7 @@ impl AstGrepService {
         Ok(inside_matches)
     }
 
+    #[allow(dead_code)]
     fn evaluate_has_rule(
         &self,
         has_rule: &RuleObject,
@@ -542,6 +548,7 @@ impl AstGrepService {
         Ok(has_matches)
     }
 
+    #[allow(dead_code)]
     fn evaluate_follows_rule(
         &self,
         follows_rule: &RuleObject,
@@ -575,6 +582,7 @@ impl AstGrepService {
         Ok(follows_matches)
     }
 
+    #[allow(dead_code)]
     fn evaluate_precedes_rule(
         &self,
         precedes_rule: &RuleObject,
@@ -610,6 +618,7 @@ impl AstGrepService {
 
     // Helper methods for relational evaluation
 
+    #[allow(dead_code)]
     fn get_all_nodes(
         &self,
         ast: &AstGrep<StrDoc<Language>>,
@@ -639,6 +648,7 @@ impl AstGrepService {
         Ok(matches)
     }
 
+    #[allow(dead_code)]
     fn is_node_inside(&self, node: &MatchResult, container: &MatchResult) -> bool {
         // Check if node is spatially inside container
         node.start_line >= container.start_line
@@ -651,23 +661,27 @@ impl AstGrepService {
                 && node.end_col == container.end_col)
     }
 
+    #[allow(dead_code)]
     fn node_contains(&self, parent: &MatchResult, child: &MatchResult) -> bool {
         // Check if parent spatially contains child
         self.is_node_inside(child, parent)
     }
 
+    #[allow(dead_code)]
     fn node_follows(&self, node: &MatchResult, preceding: &MatchResult) -> bool {
         // Check if node comes after preceding node
         node.start_line > preceding.end_line
             || (node.start_line == preceding.end_line && node.start_col >= preceding.end_col)
     }
 
+    #[allow(dead_code)]
     fn node_precedes(&self, node: &MatchResult, following: &MatchResult) -> bool {
         // Check if node comes before following node
         node.end_line < following.start_line
             || (node.end_line == following.start_line && node.end_col <= following.start_col)
     }
 
+    #[allow(dead_code)]
     fn byte_offset_to_line_col(&self, code: &str, byte_offset: usize) -> (usize, usize) {
         let mut line = 1;
         let mut col = 0;
@@ -687,6 +701,7 @@ impl AstGrepService {
         (line, col)
     }
 
+    #[allow(dead_code)]
     fn evaluate_all_rule(
         &self,
         all_rules: &[RuleObject],
@@ -711,6 +726,7 @@ impl AstGrepService {
         Ok(current_matches)
     }
 
+    #[allow(dead_code)]
     fn evaluate_any_rule(
         &self,
         any_rules: &[RuleObject],
@@ -732,6 +748,7 @@ impl AstGrepService {
         Ok(all_matches)
     }
 
+    #[allow(dead_code)]
     fn evaluate_not_rule(
         &self,
         not_rule: &RuleObject,
@@ -774,6 +791,7 @@ impl AstGrepService {
         Ok(filtered_matches)
     }
 
+    #[allow(dead_code)]
     fn intersect_matches(
         &self,
         matches1: Vec<MatchResult>,
@@ -790,32 +808,9 @@ impl AstGrepService {
 
     #[tracing::instrument(skip(self), fields(language = %param.language, pattern = %param.pattern))]
     pub async fn search(&self, param: SearchParam) -> Result<SearchResult, ServiceError> {
-        let lang = self.parse_language(param.language.as_str())?;
-
-        let ast = AstGrep::new(param.code.as_str(), lang);
-        let pattern = self.get_or_create_pattern(&param.pattern, lang)?;
-
-        let matches: Vec<MatchResult> = ast
-            .root()
-            .find_all(pattern)
-            .map(|node| {
-                let vars: HashMap<String, String> = node.get_env().clone().into();
-                let ast_node = node.get_node();
-                let start_pos = ast_node.start_pos();
-                let end_pos = ast_node.end_pos();
-                MatchResult {
-                    text: node.text().to_string(),
-                    vars,
-                    start_line: start_pos.line(),
-                    end_line: end_pos.line(),
-                    start_col: start_pos.column(ast_node),
-                    end_col: end_pos.column(ast_node),
-                }
-            })
-            .collect();
-
-        tracing::Span::current().record("matches_found", matches.len());
-        Ok(SearchResult { matches })
+        let result = self.search_service.search(param).await?;
+        tracing::Span::current().record("matches_found", result.matches.len());
+        Ok(result)
     }
 
     #[tracing::instrument(skip(self), fields(language = %param.language, pattern = %param.pattern, path_pattern = %param.path_pattern))]
@@ -823,195 +818,10 @@ impl AstGrepService {
         &self,
         param: FileSearchParam,
     ) -> Result<FileSearchResult, ServiceError> {
-        let lang = self.parse_language(param.language.as_str())?;
-
-        let mut builder = GlobSetBuilder::new();
-        builder.add(Glob::new(&param.path_pattern)?);
-        let globset = builder.build()?;
-
-        let max_file_size = param.max_file_size;
-        let max_results = param.max_results;
-
-        // Determine cursor position for pagination
-        let cursor_path = if let Some(cursor) = &param.cursor {
-            if cursor.is_complete {
-                // Previous search was complete, no more results
-                return Ok(FileSearchResult {
-                    matches: vec![],
-                    next_cursor: Some(CursorResult {
-                        last_file_path: String::new(),
-                        is_complete: true,
-                    }),
-                    total_files_found: 0,
-                });
-            }
-            Some(cursor.last_file_path.clone())
-        } else {
-            None
-        };
-
-        // Collect all matching file paths from all root directories, sorted for consistent pagination
-        let mut all_matching_files: Vec<_> = self
-            .config
-            .root_directories
-            .iter()
-            .flat_map(|root_dir| {
-                WalkDir::new(root_dir)
-                    .into_iter()
-                    .filter_map(|e| e.ok())
-                    .filter(|entry| {
-                        let path = entry.path();
-                        if !path.is_file() || !globset.is_match(path) {
-                            return false;
-                        }
-                        // Check file size
-                        if let Ok(metadata) = entry.metadata() {
-                            if metadata.len() > max_file_size {
-                                tracing::event!(
-                                    tracing::Level::WARN,
-                                    file_path = ?entry.path(),
-                                    file_size_mb = metadata.len() / (1024 * 1024),
-                                    "Skipping large file"
-                                );
-                                return false;
-                            }
-                        }
-                        true
-                    })
-                    .map(|entry| entry.path().to_path_buf())
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-
-        // Sort for consistent ordering across pagination requests
-        all_matching_files.sort();
-        let total_files_found = all_matching_files.len();
-        tracing::Span::current().record("total_files_found", total_files_found);
-
-        // Apply cursor-based filtering
-        let files_to_process: Vec<_> = if let Some(cursor_path) = cursor_path {
-            all_matching_files
-                .into_iter()
-                .skip_while(|path| path.to_string_lossy().as_ref() <= cursor_path.as_str())
-                .take(max_results * 2) // Take more files since not all will have matches
-                .collect()
-        } else {
-            all_matching_files
-                .into_iter()
-                .take(max_results * 2)
-                .collect()
-        };
-
-        // Process files in parallel
-        let pattern_str = param.pattern.clone();
-        let file_results_raw: Vec<(PathBuf, FileMatchResult)> =
-            stream::iter(files_to_process.iter().cloned())
-                .map(|path| {
-                    let pattern_str = pattern_str.clone();
-                    async move {
-                        let result = self
-                            .search_single_file(path.clone(), pattern_str, lang)
-                            .await;
-                        (path, result)
-                    }
-                })
-                .buffer_unordered(self.config.max_concurrency)
-                .filter_map(|(path, result)| async move {
-                    match result {
-                        Ok(Some(file_result)) => Some((path, file_result)),
-                        Ok(None) => None,
-                        Err(e) => {
-                            tracing::event!(
-                                tracing::Level::WARN,
-                                file_path = ?path,
-                                error = %e,
-                                "Error processing file"
-                            );
-                            None
-                        }
-                    }
-                })
-                .collect::<Vec<_>>()
-                .await;
-
-        // Determine next cursor
-        let next_cursor = if file_results_raw.len() < max_results {
-            // We got fewer results than requested, so we're done
-            Some(CursorResult {
-                last_file_path: String::new(),
-                is_complete: true,
-            })
-        } else if let Some((last_path, _)) = file_results_raw.last() {
-            // More results may be available
-            Some(CursorResult {
-                last_file_path: last_path.to_string_lossy().to_string(),
-                is_complete: false,
-            })
-        } else {
-            Some(CursorResult {
-                last_file_path: String::new(),
-                is_complete: true,
-            })
-        };
-
-        // Extract just the file results
-        let file_results: Vec<FileMatchResult> = file_results_raw
-            .into_iter()
-            .map(|(_, result)| result)
-            .collect();
-
-        tracing::Span::current().record("files_with_matches", file_results.len());
-        Ok(FileSearchResult {
-            matches: file_results,
-            next_cursor,
-            total_files_found,
-        })
-    }
-
-    async fn search_single_file(
-        &self,
-        path: PathBuf,
-        pattern_str: String,
-        lang: Language,
-    ) -> Result<Option<FileMatchResult>, ServiceError> {
-        let file_content = tokio::fs::read_to_string(&path).await?;
-
-        let ast = AstGrep::new(file_content.as_str(), lang);
-        let pattern = self.get_or_create_pattern(&pattern_str, lang)?;
-
-        let matches: Vec<MatchResult> = ast
-            .root()
-            .find_all(pattern)
-            .map(|node| {
-                let vars: HashMap<String, String> = node.get_env().clone().into();
-                let ast_node = node.get_node();
-                let start_pos = ast_node.start_pos();
-                let end_pos = ast_node.end_pos();
-                let (start_line, start_col) = (start_pos.line(), start_pos.column(ast_node));
-                let (end_line, end_col) = (end_pos.line(), end_pos.column(ast_node));
-                MatchResult {
-                    text: node.text().to_string(),
-                    vars,
-                    start_line,
-                    end_line,
-                    start_col,
-                    end_col,
-                }
-            })
-            .collect();
-
-        if !matches.is_empty() {
-            let file_size_bytes = std::fs::metadata(&path)?.len();
-            let file_hash = format!("{:x}", sha2::Sha256::digest(std::fs::read(&path)?));
-            Ok(Some(FileMatchResult {
-                file_path: path.to_string_lossy().to_string(),
-                file_size_bytes,
-                matches,
-                file_hash,
-            }))
-        } else {
-            Ok(None)
-        }
+        let result = self.search_service.file_search(param).await?;
+        tracing::Span::current().record("total_files_found", result.total_files_found);
+        tracing::Span::current().record("files_with_matches", result.matches.len());
+        Ok(result)
     }
 
     #[tracing::instrument(skip(self), fields(language = %param.language, pattern = %param.pattern, replacement = %param.replacement))]
@@ -1942,144 +1752,12 @@ Always check the response for error conditions before processing results.
         &self,
         param: RuleSearchParam,
     ) -> Result<FileSearchResult, ServiceError> {
-        // Parse the rule configuration
-        let config = self.parse_rule_config(&param.rule_config)?;
-        self.validate_rule_config(&config)?;
-
-        tracing::Span::current().record("rule_id", &config.id);
-
-        // Check if this is a simple pattern rule or a composite rule
-        if self.is_simple_pattern_rule(&config.rule) {
-            // Handle simple pattern rule
-            let pattern_str = self
-                .extract_pattern_from_rule(&config.rule)
-                .ok_or_else(|| ServiceError::ParserError("Pattern rule missing pattern".into()))?;
-
-            return self
-                .handle_simple_pattern_rule_search(&config, pattern_str, param)
-                .await;
-        } else {
-            // Handle composite rules
-            return self.handle_composite_rule_search(&config, param).await;
-        }
+        let result = self.search_service.rule_search(param).await?;
+        tracing::Span::current().record("total_files_found", result.total_files_found);
+        tracing::Span::current().record("files_with_matches", result.matches.len());
+        Ok(result)
     }
 
-    async fn handle_simple_pattern_rule_search(
-        &self,
-        config: &RuleConfig,
-        pattern_str: String,
-        param: RuleSearchParam,
-    ) -> Result<FileSearchResult, ServiceError> {
-        let path_pattern = param.path_pattern.unwrap_or_else(|| "**/*".into());
-
-        // Create equivalent FileSearchParam
-        let file_search_param = FileSearchParam {
-            path_pattern,
-            pattern: pattern_str,
-            language: config.language.clone(),
-            max_results: param.max_results,
-            max_file_size: param.max_file_size,
-            cursor: param.cursor,
-        };
-
-        // Use existing file_search functionality
-        let search_result = self.file_search(file_search_param).await?;
-
-        // Convert to rule search result format
-        let rule_matches: Vec<FileMatchResult> = search_result
-            .matches
-            .into_iter()
-            .map(|file_result| FileMatchResult {
-                file_path: file_result.file_path,
-                file_size_bytes: file_result.file_size_bytes,
-                matches: file_result.matches,
-                file_hash: file_result.file_hash,
-            })
-            .collect();
-
-        Ok(FileSearchResult {
-            matches: rule_matches,
-            next_cursor: search_result.next_cursor,
-            total_files_found: search_result.total_files_found,
-        })
-    }
-
-    async fn handle_composite_rule_search(
-        &self,
-        config: &RuleConfig,
-        param: RuleSearchParam,
-    ) -> Result<FileSearchResult, ServiceError> {
-        let lang = self.parse_language(&config.language)?;
-        let path_pattern = param.path_pattern.unwrap_or_else(|| "**/*".into());
-
-        // Build glob pattern
-        let mut builder = GlobSetBuilder::new();
-        builder.add(Glob::new(&path_pattern)?);
-        let globset = builder.build()?;
-
-        let max_file_size = param.max_file_size;
-        let max_results = param.max_results;
-
-        // Get files to process
-        let mut all_matching_files: Vec<_> = self
-            .config
-            .root_directories
-            .iter()
-            .flat_map(|root_dir| {
-                WalkDir::new(root_dir)
-                    .into_iter()
-                    .filter_map(|e| e.ok())
-                    .filter(|entry| {
-                        let path = entry.path();
-                        if !path.is_file() || !globset.is_match(path) {
-                            return false;
-                        }
-                        // Check file size
-                        if let Ok(metadata) = entry.metadata() {
-                            if metadata.len() > max_file_size {
-                                return false;
-                            }
-                        }
-                        true
-                    })
-                    .map(|entry| entry.path().to_path_buf())
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-
-        all_matching_files.sort();
-        all_matching_files.truncate(max_results);
-
-        // Process files with composite rule evaluation
-        let mut rule_matches = Vec::new();
-
-        for file_path in &all_matching_files {
-            if let Ok(content) = std::fs::read_to_string(file_path) {
-                match self.evaluate_rule_against_code(&config.rule, &content, lang) {
-                    Ok(matches) => {
-                        if !matches.is_empty() {
-                            let file_hash = format!("{:x}", sha2::Sha256::digest(&content));
-                            rule_matches.push(FileMatchResult {
-                                file_path: file_path.to_string_lossy().to_string(),
-                                file_size_bytes: content.len() as u64,
-                                matches,
-                                file_hash,
-                            });
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to evaluate rule for file {:?}: {}", file_path, e);
-                    }
-                }
-            }
-        }
-
-        Ok(FileSearchResult {
-            matches: rule_matches,
-            next_cursor: None, // For now, no pagination for composite rules
-            total_files_found: all_matching_files.len(),
-        })
-    }
 
     #[tracing::instrument(skip(self), fields(rule_id))]
     pub async fn rule_replace(
