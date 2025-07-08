@@ -71,7 +71,9 @@ impl SearchService {
             .map_err(|e| ServiceError::Internal(format!("Failed to build glob set: {e}")))?;
 
         // Collect all potential files first
-        let all_files: Vec<(String, u64)> = self.config.root_directories
+        let all_files: Vec<(String, u64)> = self
+            .config
+            .root_directories
             .iter()
             .flat_map(|root_dir| {
                 WalkDir::new(root_dir)
@@ -82,14 +84,15 @@ impl SearchService {
                     .filter_map(|entry| {
                         let path = entry.path();
                         let path_str = path.to_string_lossy().to_string();
-                        
+
                         // Check if matches glob pattern
                         if !glob_set.is_match(&path_str) {
                             return None;
                         }
-                        
+
                         // Check file size
-                        entry.metadata()
+                        entry
+                            .metadata()
                             .ok()
                             .filter(|m| m.len() <= param.max_file_size)
                             .map(|m| (path_str, m.len()))
@@ -103,46 +106,49 @@ impl SearchService {
 
         // Apply cursor filtering and process files
         let cursor_filter = param.cursor.as_ref().map(|c| c.last_file_path.clone());
-        
+
         let file_results: Vec<FileMatchResult> = sorted_files
             .into_iter()
-            .filter(|(path, _)| {
-                cursor_filter.as_ref().map_or(true, |start| path > start)
-            })
+            .filter(|(path, _)| cursor_filter.as_ref().map_or(true, |start| path > start))
             .filter_map(|(path_str, file_size)| {
                 // Read file and search for matches
-                std::fs::read_to_string(&path_str)
-                    .ok()
-                    .and_then(|content| {
-                        self.pattern_matcher
-                            .search(&content, &param.pattern, lang)
-                            .ok()
-                            .and_then(|matches| {
-                                if matches.is_empty() {
-                                    None
-                                } else {
-                                    let file_hash = format!("{:x}", Sha256::digest(content.as_bytes()));
-                                    Some(FileMatchResult {
-                                        file_path: path_str,
-                                        file_size_bytes: file_size,
-                                        matches,
-                                        file_hash,
-                                    })
-                                }
-                            })
-                    })
+                std::fs::read_to_string(&path_str).ok().and_then(|content| {
+                    self.pattern_matcher
+                        .search(&content, &param.pattern, lang)
+                        .ok()
+                        .and_then(|matches| {
+                            if matches.is_empty() {
+                                None
+                            } else {
+                                let file_hash = format!("{:x}", Sha256::digest(content.as_bytes()));
+                                Some(FileMatchResult {
+                                    file_path: path_str,
+                                    file_size_bytes: file_size,
+                                    matches,
+                                    file_hash,
+                                })
+                            }
+                        })
+                })
             })
             .take(param.max_results)
             .collect();
 
         let total_files_found = file_results.len();
         let is_complete = file_results.len() < param.max_results;
-        let last_path = file_results.last().map(|r| r.file_path.clone()).unwrap_or_default();
+        let last_path = file_results
+            .last()
+            .map(|r| r.file_path.clone())
+            .unwrap_or_default();
 
         Ok(FileSearchResult {
             matches: file_results,
             next_cursor: Some(CursorResult {
-                last_file_path: if is_complete { String::new() } else { last_path },
+                last_file_path: if is_complete {
+                    String::new()
+                } else {
+                    last_path
+                },
                 is_complete,
             }),
             total_files_found,
@@ -166,7 +172,7 @@ impl SearchService {
                 });
             }
         }
-        
+
         let rule = parse_rule_config(&param.rule_config)?;
         let lang = Language::from_str(&rule.language)
             .map_err(|_| ServiceError::Internal("Failed to parse language".to_string()))?;

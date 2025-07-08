@@ -29,7 +29,11 @@ async fn test_file_search_pagination_basic() {
     };
 
     let result1 = service.file_search(param.clone()).await.unwrap();
-    println!("Result1: {} matches, {} total_files_found", result1.matches.len(), result1.total_files_found);
+    println!(
+        "Result1: {} matches, {} total_files_found",
+        result1.matches.len(),
+        result1.total_files_found
+    );
     for m in &result1.matches {
         println!("  File: {}", m.file_path);
     }
@@ -41,20 +45,26 @@ async fn test_file_search_pagination_basic() {
 
     // Get next page
     let mut param2 = param.clone();
-    param2.cursor = result1.next_cursor.clone().map(|c| ast_grep_mcp::CursorParam {
-        last_file_path: c.last_file_path,
-        is_complete: c.is_complete,
-    });
+    param2.cursor = result1
+        .next_cursor
+        .clone()
+        .map(|c| ast_grep_mcp::CursorParam {
+            last_file_path: c.last_file_path,
+            is_complete: c.is_complete,
+        });
     let result2 = service.file_search(param2).await.unwrap();
     assert_eq!(result2.matches.len(), 3);
     assert!(!result2.next_cursor.as_ref().unwrap().is_complete);
 
     // Continue pagination
     let mut param3 = param.clone();
-    param3.cursor = result2.next_cursor.clone().map(|c| ast_grep_mcp::CursorParam {
-        last_file_path: c.last_file_path,
-        is_complete: c.is_complete,
-    });
+    param3.cursor = result2
+        .next_cursor
+        .clone()
+        .map(|c| ast_grep_mcp::CursorParam {
+            last_file_path: c.last_file_path,
+            is_complete: c.is_complete,
+        });
     let result3 = service.file_search(param3).await.unwrap();
     println!("Result3: {} matches", result3.matches.len());
     for m in &result3.matches {
@@ -65,10 +75,13 @@ async fn test_file_search_pagination_basic() {
 
     // Get final page
     let mut param4 = param.clone();
-    param4.cursor = result3.next_cursor.clone().map(|c| ast_grep_mcp::CursorParam {
-        last_file_path: c.last_file_path,
-        is_complete: c.is_complete,
-    });
+    param4.cursor = result3
+        .next_cursor
+        .clone()
+        .map(|c| ast_grep_mcp::CursorParam {
+            last_file_path: c.last_file_path,
+            is_complete: c.is_complete,
+        });
     let result4 = service.file_search(param4).await.unwrap();
     assert_eq!(result4.matches.len(), 1); // Only 1 file left
     assert!(result4.next_cursor.as_ref().unwrap().is_complete);
@@ -151,20 +164,26 @@ async fn test_file_replace_pagination() {
 
     // Get next page
     let mut param2 = param.clone();
-    param2.cursor = result1.next_cursor.clone().map(|c| ast_grep_mcp::CursorParam {
-        last_file_path: c.last_file_path,
-        is_complete: c.is_complete,
-    });
+    param2.cursor = result1
+        .next_cursor
+        .clone()
+        .map(|c| ast_grep_mcp::CursorParam {
+            last_file_path: c.last_file_path,
+            is_complete: c.is_complete,
+        });
     let result2 = service.file_replace(param2).await.unwrap();
     assert_eq!(result2.file_results.len(), 2);
     assert!(!result2.next_cursor.as_ref().unwrap().is_complete);
 
     // Get final page
     let mut param3 = param.clone();
-    param3.cursor = result2.next_cursor.clone().map(|c| ast_grep_mcp::CursorParam {
-        last_file_path: c.last_file_path,
-        is_complete: c.is_complete,
-    });
+    param3.cursor = result2
+        .next_cursor
+        .clone()
+        .map(|c| ast_grep_mcp::CursorParam {
+            last_file_path: c.last_file_path,
+            is_complete: c.is_complete,
+        });
     let result3 = service.file_replace(param3).await.unwrap();
     assert_eq!(result3.file_results.len(), 1);
     assert!(result3.next_cursor.as_ref().unwrap().is_complete);
@@ -245,7 +264,7 @@ async fn test_pagination_consistency() {
 
         let result = service.file_search(param).await.unwrap();
         paginated_results.extend(result.matches.clone());
-        
+
         if result.next_cursor.as_ref().unwrap().is_complete {
             break;
         }
@@ -257,9 +276,17 @@ async fn test_pagination_consistency() {
 
     // Verify same results
     assert_eq!(paginated_results.len(), result_all.matches.len());
-    
+
     // Verify order is consistent
-    for (i, (paginated, all)) in paginated_results.iter().zip(result_all.matches.iter()).enumerate() {
-        assert_eq!(paginated.file_path, all.file_path, "Mismatch at position {}", i);
+    for (i, (paginated, all)) in paginated_results
+        .iter()
+        .zip(result_all.matches.iter())
+        .enumerate()
+    {
+        assert_eq!(
+            paginated.file_path, all.file_path,
+            "Mismatch at position {}",
+            i
+        );
     }
 }
