@@ -1,5 +1,6 @@
 use crate::ast_utils::AstParser;
 use crate::config::ServiceConfig;
+use crate::debug::DebugService;
 use crate::errors::ServiceError;
 use crate::pattern::PatternMatcher;
 use crate::replace::ReplaceService;
@@ -42,6 +43,8 @@ pub struct AstGrepService {
     replace_service: ReplaceService,
     #[allow(dead_code)]
     rule_service: RuleService,
+    #[allow(dead_code)]
+    debug_service: DebugService,
 }
 
 impl Default for AstGrepService {
@@ -347,6 +350,7 @@ impl AstGrepService {
             rule_storage,
             catalog_manager,
         );
+        let debug_service = DebugService::new(pattern_matcher.clone());
 
         Self {
             config,
@@ -356,6 +360,7 @@ impl AstGrepService {
             search_service,
             replace_service,
             rule_service,
+            debug_service,
         }
     }
 
@@ -421,6 +426,19 @@ impl AstGrepService {
             code_length: param.code.chars().count(),
             node_kinds,
         })
+    }
+
+    /// Debug a pattern to understand its structure and behavior.
+    pub async fn debug_pattern(
+        &self,
+        param: DebugPatternParam,
+    ) -> Result<DebugPatternResult, ServiceError> {
+        self.debug_service.debug_pattern(param).await
+    }
+
+    /// Debug AST/CST structure of code.
+    pub async fn debug_ast(&self, param: DebugAstParam) -> Result<DebugAstResult, ServiceError> {
+        self.debug_service.debug_ast(param).await
     }
 
     fn parse_rule_config(&self, rule_config_str: &str) -> Result<RuleConfig, ServiceError> {
@@ -2022,6 +2040,34 @@ impl ServerHandler for AstGrepService {
                 .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
                 let result = self.generate_ast(param).await.map_err(ErrorData::from)?;
                 let summary = ResponseFormatter::format_generate_ast_result(&result);
+                ResponseFormatter::create_formatted_response(&result, summary)
+                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
+            }
+            "debug_pattern" => {
+                let param: DebugPatternParam = serde_json::from_value(serde_json::Value::Object(
+                    request.arguments.unwrap_or_default(),
+                ))
+                .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
+                let result = self
+                    .debug_service
+                    .debug_pattern(param)
+                    .await
+                    .map_err(ErrorData::from)?;
+                let summary = ResponseFormatter::format_debug_pattern_result(&result);
+                ResponseFormatter::create_formatted_response(&result, summary)
+                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
+            }
+            "debug_ast" => {
+                let param: DebugAstParam = serde_json::from_value(serde_json::Value::Object(
+                    request.arguments.unwrap_or_default(),
+                ))
+                .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
+                let result = self
+                    .debug_service
+                    .debug_ast(param)
+                    .await
+                    .map_err(ErrorData::from)?;
+                let summary = ResponseFormatter::format_debug_ast_result(&result);
                 ResponseFormatter::create_formatted_response(&result, summary)
                     .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
             }

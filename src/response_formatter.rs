@@ -448,3 +448,95 @@ impl ToTitleCase for str {
         result
     }
 }
+
+impl ResponseFormatter {
+    /// Format a debug pattern result into a human-readable summary
+    pub fn format_debug_pattern_result(result: &DebugPatternResult) -> String {
+        let mut summary = String::new();
+
+        summary.push_str("🔍 Pattern Debug Analysis\n");
+        summary.push_str(&format!("Pattern: {}\n", result.pattern));
+        summary.push_str(&format!("Language: {}\n", result.language));
+        summary.push_str(&format!("Format: {:?}\n\n", result.format));
+
+        summary.push_str("📊 Analysis Results:\n");
+        summary.push_str(&result.debug_info);
+        summary.push('\n');
+
+        summary.push_str("💡 Explanation:\n");
+        summary.push_str(&result.explanation);
+        summary.push('\n');
+
+        if let Some(ref matches) = result.sample_matches {
+            summary.push_str("\n✅ Sample Code Testing:\n");
+            if matches.is_empty() {
+                summary.push_str("  No matches found in sample code\n");
+            } else {
+                summary.push_str(&format!(
+                    "  Found {} match(es) in sample code:\n",
+                    matches.len()
+                ));
+                for (i, match_result) in matches.iter().take(3).enumerate() {
+                    summary.push_str(&format!("  {}. {}\n", i + 1, match_result.text));
+                }
+                if matches.len() > 3 {
+                    summary.push_str(&format!("  ... and {} more matches\n", matches.len() - 3));
+                }
+            }
+        }
+
+        summary
+    }
+
+    /// Format a debug AST result into a human-readable summary
+    pub fn format_debug_ast_result(result: &DebugAstResult) -> String {
+        let mut summary = String::new();
+
+        summary.push_str("🌳 AST Debug Analysis\n");
+        summary.push_str(&format!("Language: {}\n", result.language));
+        summary.push_str(&format!("Format: {:?}\n", result.format));
+        summary.push_str(&format!(
+            "Code Length: {} characters\n\n",
+            result.code_length
+        ));
+
+        summary.push_str("📊 Tree Statistics:\n");
+        summary.push_str(&format!(
+            "  Total Nodes: {}\n",
+            result.tree_stats.total_nodes
+        ));
+        summary.push_str(&format!("  Leaf Nodes: {}\n", result.tree_stats.leaf_nodes));
+        summary.push_str(&format!("  Max Depth: {}\n", result.tree_stats.max_depth));
+        summary.push_str(&format!(
+            "  Error Nodes: {}\n\n",
+            result.tree_stats.error_nodes
+        ));
+
+        summary.push_str("🏷️ Node Types Found:\n");
+        if result.node_kinds.is_empty() {
+            summary.push_str("  No node types detected\n");
+        } else {
+            for (i, node_kind) in result.node_kinds.iter().take(10).enumerate() {
+                summary.push_str(&format!("  {}. {}\n", i + 1, node_kind));
+            }
+            if result.node_kinds.len() > 10 {
+                summary.push_str(&format!(
+                    "  ... and {} more node types\n",
+                    result.node_kinds.len() - 10
+                ));
+            }
+        }
+
+        summary.push_str("\n🌲 Syntax Tree:\n");
+        // Show first few lines of the tree
+        let tree_lines: Vec<&str> = result.tree.lines().take(20).collect();
+        for line in tree_lines {
+            summary.push_str(&format!("  {line}\n"));
+        }
+        if result.tree.lines().count() > 20 {
+            summary.push_str("  ... (tree truncated, see full JSON response for complete tree)\n");
+        }
+
+        summary
+    }
+}
