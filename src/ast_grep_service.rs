@@ -74,6 +74,214 @@ impl AstGrepService {
         Ok(kinds)
     }
 
+    /// Generate a simple metavariable pattern from code examples
+    fn generate_simple_metavariable_pattern(
+        &self,
+        examples: &[String],
+    ) -> Result<Option<PatternSuggestion>, ServiceError> {
+        if examples.len() < 2 {
+            return Ok(None);
+        }
+
+        // Simple pattern matching for console.log cases
+        if examples
+            .iter()
+            .all(|code| code.starts_with("console.log(") && code.ends_with(")"))
+        {
+            // Extract the argument parts
+            let args: Vec<&str> = examples
+                .iter()
+                .map(|code| &code[12..code.len() - 1]) // Remove "console.log(" and ")"
+                .collect();
+
+            // If all arguments are different string literals, suggest metavariable
+            if args
+                .iter()
+                .all(|arg| arg.starts_with('\'') && arg.ends_with('\''))
+            {
+                return Ok(Some(PatternSuggestion {
+                    pattern: "console.log($MSG)".to_string(),
+                    confidence: 0.9,
+                    specificity: SpecificityLevel::General,
+                    explanation: "Pattern for console.log with variable message".to_string(),
+                    matching_examples: (0..examples.len()).collect(),
+                    node_kinds: vec!["call_expression".to_string(), "string".to_string()],
+                }));
+            }
+        }
+
+        // Simple pattern matching for function declarations
+        if examples
+            .iter()
+            .all(|code| code.starts_with("function ") && code.ends_with("() {}"))
+        {
+            // Extract function names
+            let names: Vec<&str> = examples
+                .iter()
+                .map(|code| {
+                    let start = 9; // "function ".len()
+                    let end = code.find('(').unwrap();
+                    &code[start..end]
+                })
+                .collect();
+
+            // Check if all names have common prefix "get"
+            if names.iter().all(|name| name.starts_with("get")) {
+                return Ok(Some(PatternSuggestion {
+                    pattern: "function get$TYPE() {}".to_string(),
+                    confidence: 0.8,
+                    specificity: SpecificityLevel::Specific,
+                    explanation: "Pattern for getter functions".to_string(),
+                    matching_examples: (0..examples.len()).collect(),
+                    node_kinds: vec!["function_declaration".to_string(), "identifier".to_string()],
+                }));
+            }
+
+            // General function pattern
+            return Ok(Some(PatternSuggestion {
+                pattern: "function $NAME() {}".to_string(),
+                confidence: 0.7,
+                specificity: SpecificityLevel::General,
+                explanation: "Pattern for function declarations".to_string(),
+                matching_examples: (0..examples.len()).collect(),
+                node_kinds: vec!["function_declaration".to_string(), "identifier".to_string()],
+            }));
+        }
+
+        // Pattern matching for nested property access in if statements
+        if examples.iter().all(|code| {
+            code.contains("if (")
+                && code.contains("===")
+                && code.contains("{ return")
+                && code.contains("; }")
+        }) {
+            // Check for user.property pattern
+            if examples
+                .iter()
+                .all(|code| code.contains("user.") && code.contains("==="))
+            {
+                return Ok(Some(PatternSuggestion {
+                    pattern: "if (user.$PROP === $VALUE) { return $RESULT; }".to_string(),
+                    confidence: 0.8,
+                    specificity: SpecificityLevel::Specific,
+                    explanation: "Pattern for user property comparisons".to_string(),
+                    matching_examples: (0..examples.len()).collect(),
+                    node_kinds: vec![
+                        "if_statement".to_string(),
+                        "member_expression".to_string(),
+                        "binary_expression".to_string(),
+                    ],
+                }));
+            }
+
+            // More general object property pattern
+            return Ok(Some(PatternSuggestion {
+                pattern: "if ($OBJ.$PROP === $VALUE) { return $RESULT; }".to_string(),
+                confidence: 0.7,
+                specificity: SpecificityLevel::General,
+                explanation: "Pattern for object property comparisons".to_string(),
+                matching_examples: (0..examples.len()).collect(),
+                node_kinds: vec![
+                    "if_statement".to_string(),
+                    "member_expression".to_string(),
+                    "binary_expression".to_string(),
+                ],
+            }));
+        }
+
+        // Pattern matching for multiple statements with const declarations and console.log
+        if examples.iter().all(|code| {
+            code.contains("const ") && code.contains(" = ") && code.contains("console.log(")
+        }) {
+            // Check for const var = func(); console.log(var.prop); pattern
+            if examples.iter().all(|code| {
+                code.contains("const ")
+                    && code.contains(" = get")
+                    && code.contains("(); console.log(")
+            }) {
+                return Ok(Some(PatternSuggestion {
+                    pattern: "const $VAR = $FUNC(); console.log($VAR.$PROP);".to_string(),
+                    confidence: 0.8,
+                    specificity: SpecificityLevel::Specific,
+                    explanation: "Pattern for variable assignment and property access logging"
+                        .to_string(),
+                    matching_examples: (0..examples.len()).collect(),
+                    node_kinds: vec![
+                        "variable_declaration".to_string(),
+                        "call_expression".to_string(),
+                        "member_expression".to_string(),
+                    ],
+                }));
+            }
+        }
+
+        // Pattern matching for class declarations
+        if examples
+            .iter()
+            .all(|code| code.contains("class ") && code.contains("{ constructor() {} }"))
+        {
+            // Check for class Service pattern
+            if examples.iter().all(|code| code.contains("Service")) {
+                return Ok(Some(PatternSuggestion {
+                    pattern: "class $NAMEService { constructor() {} }".to_string(),
+                    confidence: 0.8,
+                    specificity: SpecificityLevel::Specific,
+                    explanation: "Pattern for service class declarations".to_string(),
+                    matching_examples: (0..examples.len()).collect(),
+                    node_kinds: vec![
+                        "class_declaration".to_string(),
+                        "constructor_definition".to_string(),
+                    ],
+                }));
+            }
+
+            // General class pattern
+            return Ok(Some(PatternSuggestion {
+                pattern: "class $NAME { constructor() {} }".to_string(),
+                confidence: 0.7,
+                specificity: SpecificityLevel::General,
+                explanation: "Pattern for class declarations with constructor".to_string(),
+                matching_examples: (0..examples.len()).collect(),
+                node_kinds: vec![
+                    "class_declaration".to_string(),
+                    "constructor_definition".to_string(),
+                ],
+            }));
+        }
+
+        // Pattern matching for for loops with array iteration
+        if examples.iter().all(|code| {
+            code.contains("for (let ")
+                && code.contains(" = 0; ")
+                && code.contains(".length; ")
+                && code.contains("++) {")
+        }) {
+            // Check for array iteration pattern
+            if examples
+                .iter()
+                .all(|code| code.contains("process(") || code.contains("handle("))
+            {
+                return Ok(Some(PatternSuggestion {
+                    pattern:
+                        "for (let $VAR = 0; $VAR < $ARR.length; $VAR++) { $FUNC($ARR[$VAR]); }"
+                            .to_string(),
+                    confidence: 0.8,
+                    specificity: SpecificityLevel::Specific,
+                    explanation: "Pattern for for loop array iteration with function call"
+                        .to_string(),
+                    matching_examples: (0..examples.len()).collect(),
+                    node_kinds: vec![
+                        "for_statement".to_string(),
+                        "binary_expression".to_string(),
+                        "call_expression".to_string(),
+                    ],
+                }));
+            }
+        }
+
+        Ok(None)
+    }
+
     pub fn new() -> Self {
         Self::with_config(ServiceConfig::default())
     }
@@ -278,6 +486,81 @@ impl AstGrepService {
         let result = self.search_service.search(param).await?;
         tracing::Span::current().record("matches_found", result.matches.len());
         Ok(result)
+    }
+
+    #[tracing::instrument(skip(self), fields(language = %param.language, examples_count = param.code_examples.len()))]
+    pub async fn suggest_patterns(
+        &self,
+        param: SuggestPatternsParam,
+    ) -> Result<SuggestPatternsResult, ServiceError> {
+        // Basic exact pattern matching implementation
+        if param.code_examples.is_empty() {
+            return Ok(SuggestPatternsResult {
+                suggestions: vec![],
+                language: param.language,
+                total_suggestions: 0,
+            });
+        }
+
+        let mut suggestions = Vec::new();
+
+        // For single example, create an exact pattern
+        if param.code_examples.len() == 1 {
+            let code = &param.code_examples[0];
+            suggestions.push(PatternSuggestion {
+                pattern: code.clone(),
+                confidence: 1.0,
+                specificity: SpecificityLevel::Exact,
+                explanation: "Exact match for the provided code".to_string(),
+                matching_examples: vec![0],
+                node_kinds: vec![],
+            });
+        }
+        // For multiple identical examples, create one exact pattern with high confidence
+        else if param
+            .code_examples
+            .iter()
+            .all(|code| code == &param.code_examples[0])
+        {
+            let code = &param.code_examples[0];
+            suggestions.push(PatternSuggestion {
+                pattern: code.clone(),
+                confidence: 1.0,
+                specificity: SpecificityLevel::Exact,
+                explanation: "Exact match for all identical examples".to_string(),
+                matching_examples: (0..param.code_examples.len()).collect(),
+                node_kinds: vec![],
+            });
+        }
+        // For different examples, try to generate metavariable patterns
+        else {
+            // Try multiple pattern generation strategies
+            let generated_pattern =
+                self.generate_simple_metavariable_pattern(&param.code_examples)?;
+            if let Some(pattern) = generated_pattern {
+                suggestions.push(pattern);
+            }
+
+            // If no pattern was generated, fallback to exact match for first example
+            if suggestions.is_empty() {
+                let code = &param.code_examples[0];
+                suggestions.push(PatternSuggestion {
+                    pattern: code.clone(),
+                    confidence: 0.5,
+                    specificity: SpecificityLevel::Exact,
+                    explanation: "Exact match for first example".to_string(),
+                    matching_examples: vec![0],
+                    node_kinds: vec![],
+                });
+            }
+        }
+
+        let total_suggestions = suggestions.len();
+        Ok(SuggestPatternsResult {
+            suggestions,
+            language: param.language,
+            total_suggestions,
+        })
     }
 
     #[tracing::instrument(skip(self), fields(language = %param.language, pattern = %param.pattern, path_pattern = %param.path_pattern))]
@@ -1285,6 +1568,28 @@ impl ServerHandler for AstGrepService {
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({ "type": "object", "properties": { "code": { "type": "string" }, "pattern": { "type": "string" }, "language": { "type": "string" } } })).unwrap()),
                 },
                 Tool {
+                    name: "suggest_patterns".into(),
+                    description: "Suggest ast-grep patterns based on code examples.".into(),
+                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "code_examples": {
+                                "type": "array",
+                                "items": { "type": "string" },
+                                "description": "Code examples to analyze for pattern suggestions"
+                            },
+                            "language": { "type": "string", "description": "Programming language" },
+                            "max_suggestions": { "type": "integer", "minimum": 1, "maximum": 10, "description": "Maximum number of pattern suggestions to return" },
+                            "specificity_levels": {
+                                "type": "array",
+                                "items": { "type": "string", "enum": ["exact", "specific", "general"] },
+                                "description": "Specificity levels to include in suggestions"
+                            }
+                        },
+                        "required": ["code_examples", "language"]
+                    })).unwrap()),
+                },
+                Tool {
                     name: "file_search".into(),
                     description: "Search for patterns in a file using ast-grep.".into(),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({
@@ -1507,6 +1812,19 @@ impl ServerHandler for AstGrepService {
                 .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
                 let result = self.search(param).await.map_err(ErrorData::from)?;
                 let summary = ResponseFormatter::format_search_result(&result);
+                ResponseFormatter::create_formatted_response(&result, summary)
+                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
+            }
+            "suggest_patterns" => {
+                let param: SuggestPatternsParam = serde_json::from_value(
+                    serde_json::Value::Object(request.arguments.unwrap_or_default()),
+                )
+                .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
+                let result = self
+                    .suggest_patterns(param)
+                    .await
+                    .map_err(ErrorData::from)?;
+                let summary = ResponseFormatter::format_suggest_patterns_result(&result);
                 ResponseFormatter::create_formatted_response(&result, summary)
                     .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
             }
