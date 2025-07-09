@@ -217,7 +217,10 @@ fn test_create_success_result() {
             end_col: 10,
             text: "test match".to_string(),
             vars: std::collections::HashMap::new(),
+            context_before: None,
+            context_after: None,
         }],
+        matches_summary: None,
     };
 
     let result = ToolService::create_success_result(&search_result);

@@ -36,14 +36,23 @@ impl ReplaceService {
             .map_err(|_| ServiceError::Internal("Failed to parse language".to_string()))?;
 
         // First, find all matches to track changes
-        let matches = self
-            .pattern_matcher
-            .search(&param.code, &param.pattern, lang)?;
+        let matches = self.pattern_matcher.search_with_options(
+            &param.code,
+            &param.pattern,
+            lang,
+            param.selector.as_deref(),
+            param.context.as_deref(),
+        )?;
 
         // Apply the replacement
-        let new_code =
-            self.pattern_matcher
-                .replace(&param.code, &param.pattern, &param.replacement, lang)?;
+        let new_code = self.pattern_matcher.replace_with_options(
+            &param.code,
+            &param.pattern,
+            &param.replacement,
+            lang,
+            param.selector.as_deref(),
+            param.context.as_deref(),
+        )?;
 
         // Convert matches to change results
         let changes: Vec<ChangeResult> = matches
@@ -86,6 +95,12 @@ impl ReplaceService {
         let lang = Language::from_str(&param.language)
             .map_err(|_| ServiceError::Internal("Failed to parse language".to_string()))?;
 
+        // Extract fields we need in the closure
+        let pattern = param.pattern.clone();
+        let replacement = param.replacement.clone();
+        let selector = param.selector.clone();
+        let context = param.context.clone();
+
         // Use shared search behavior
         self.process_files_with_replacements(
             &param.path_pattern,
@@ -95,16 +110,24 @@ impl ReplaceService {
             param.dry_run,
             |content| {
                 // Apply pattern-based replacement
-                let matches = self.pattern_matcher.search(content, &param.pattern, lang)?;
+                let matches = self.pattern_matcher.search_with_options(
+                    content,
+                    &pattern,
+                    lang,
+                    selector.as_deref(),
+                    context.as_deref(),
+                )?;
                 if matches.is_empty() {
                     return Ok(None);
                 }
 
-                let new_content = self.pattern_matcher.replace(
+                let new_content = self.pattern_matcher.replace_with_options(
                     content,
-                    &param.pattern,
-                    &param.replacement,
+                    &pattern,
+                    &replacement,
                     lang,
+                    selector.as_deref(),
+                    context.as_deref(),
                 )?;
 
                 let changes: Vec<ChangeResult> = matches
@@ -115,7 +138,7 @@ impl ReplaceService {
                         start_col: m.start_col,
                         end_col: m.end_col,
                         old_text: m.text,
-                        new_text: param.replacement.clone(),
+                        new_text: replacement.clone(),
                     })
                     .collect();
 
@@ -422,12 +445,12 @@ mod tests {
 var x = 1;
 var y = 2;
 "#;
-        let param = ReplaceParam {
-            code: code.to_string(),
-            pattern: "var $VAR = $VALUE;".to_string(),
-            replacement: "let $VAR = $VALUE;".to_string(),
-            language: "javascript".to_string(),
-        };
+        let param = ReplaceParam::new(
+            code,
+            "var $VAR = $VALUE;",
+            "let $VAR = $VALUE;",
+            "javascript",
+        );
 
         let result = service.replace(param).await.unwrap();
         assert!(result.new_code.contains("let"));
@@ -439,12 +462,7 @@ var y = 2;
     async fn test_replace_no_matches() {
         let (service, _temp_dir) = create_test_replace_service();
         let code = "function test() { return 42; }";
-        let param = ReplaceParam {
-            code: code.to_string(),
-            pattern: "console.log($VAR)".to_string(),
-            replacement: "logger.info($VAR)".to_string(),
-            language: "javascript".to_string(),
-        };
+        let param = ReplaceParam::new(code, "console.log($VAR)", "logger.info($VAR)", "javascript");
 
         let result = service.replace(param).await.unwrap();
         assert_eq!(result.new_code, code); // No changes
@@ -454,12 +472,7 @@ var y = 2;
     #[tokio::test]
     async fn test_replace_invalid_language() {
         let (service, _temp_dir) = create_test_replace_service();
-        let param = ReplaceParam {
-            code: "test".to_string(),
-            pattern: "test".to_string(),
-            replacement: "replacement".to_string(),
-            language: "invalid_language".to_string(),
-        };
+        let param = ReplaceParam::new("test", "test", "replacement", "invalid_language");
 
         let result = service.replace(param).await;
         assert!(result.is_err());
@@ -490,6 +503,9 @@ var y = 2;
             include_samples: false,
             max_samples: 3,
             cursor: None,
+            strictness: None,
+            selector: None,
+            context: None,
         };
 
         let result = service.file_replace(param).await.unwrap();
@@ -519,6 +535,9 @@ var y = 2;
             include_samples: false,
             max_samples: 3,
             cursor: None,
+            strictness: None,
+            selector: None,
+            context: None,
         };
 
         let result = service.file_replace(param).await.unwrap();
@@ -548,6 +567,9 @@ var y = 2;
             include_samples: true,
             max_samples: 1,
             cursor: None,
+            strictness: None,
+            selector: None,
+            context: None,
         };
 
         let result = service.file_replace(param).await.unwrap();
@@ -576,6 +598,9 @@ var y = 2;
                 last_file_path: String::new(),
                 is_complete: true,
             }),
+            strictness: None,
+            selector: None,
+            context: None,
         };
 
         let result = service.file_replace(param).await.unwrap();
@@ -725,6 +750,9 @@ fix: "logger.info($VAR)"
             include_samples: false,
             max_samples: 3,
             cursor: None,
+            strictness: None,
+            selector: None,
+            context: None,
         };
 
         let result = service.file_replace(param).await.unwrap();

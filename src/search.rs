@@ -1,4 +1,5 @@
 use crate::config::ServiceConfig;
+use crate::context_lines::add_context_to_search_result;
 use crate::errors::ServiceError;
 use crate::path_validation::validate_path_pattern;
 use crate::pattern::PatternMatcher;
@@ -31,88 +32,115 @@ impl SearchService {
         }
     }
 
-    async fn search_single_file(
+    /// Process a single file for search matches
+    #[allow(clippy::too_many_arguments)]
+    fn process_file_search(
         &self,
         file_path: &str,
+        file_size: u64,
         pattern: &str,
         lang: Language,
-    ) -> Result<FileSearchResult, ServiceError> {
-        let path = std::path::Path::new(file_path);
+        selector: Option<&str>,
+        context: Option<&str>,
+        max_file_size: u64,
+        context_before: Option<usize>,
+        context_after: Option<usize>,
+        context_lines: Option<usize>,
+    ) -> Option<FileMatchResult> {
+        // Skip files that are too large
+        if file_size > max_file_size {
+            return None;
+        }
 
-        // Validate that the file is under one of the configured root directories
+        // Read file and search for matches
+        std::fs::read_to_string(file_path).ok().and_then(|content| {
+            self.pattern_matcher
+                .search_with_options(&content, pattern, lang, selector, context)
+                .ok()
+                .and_then(|matches| {
+                    if matches.is_empty() {
+                        None
+                    } else {
+                        let mut final_matches = matches;
+
+                        // Add context lines if requested
+                        if context_before.is_some()
+                            || context_after.is_some()
+                            || context_lines.is_some()
+                        {
+                            final_matches = crate::context_lines::extract_context_lines(
+                                &content,
+                                &final_matches,
+                                context_before,
+                                context_after,
+                                context_lines,
+                            );
+                        }
+
+                        let file_hash = format!("{:x}", Sha256::digest(content.as_bytes()));
+                        Some(FileMatchResult {
+                            file_path: file_path.to_string(),
+                            file_size_bytes: file_size,
+                            matches: final_matches,
+                            file_hash,
+                        })
+                    }
+                })
+        })
+    }
+
+    /// Validate that a file path is under one of the configured root directories
+    fn validate_file_under_roots(&self, file_path: &str) -> Result<(), ServiceError> {
+        let path = std::path::Path::new(file_path);
         let canonical_path = path
             .canonicalize()
             .map_err(|e| ServiceError::Internal(format!("Failed to canonicalize path: {e}")))?;
 
-        let mut is_under_root = false;
         for root_dir in &self.config.root_directories {
             if let Ok(canonical_root) = std::path::Path::new(root_dir).canonicalize() {
                 if canonical_path.starts_with(&canonical_root) {
-                    is_under_root = true;
-                    break;
+                    return Ok(());
                 }
             }
         }
 
-        if !is_under_root {
-            return Err(ServiceError::Internal(
-                "File path is not under any configured root directory".to_string(),
-            ));
-        }
-
-        // Check file size
-        let metadata = std::fs::metadata(file_path)
-            .map_err(|e| ServiceError::Internal(format!("Failed to read file metadata: {e}")))?;
-
-        if metadata.len() > self.config.max_file_size {
-            return Ok(FileSearchResult {
-                matches: vec![],
-                next_cursor: Some(CursorResult {
-                    last_file_path: file_path.to_string(),
-                    is_complete: true,
-                }),
-                total_files_found: 0,
-            });
-        }
-
-        // Read and search the file
-        let content = std::fs::read_to_string(file_path)
-            .map_err(|e| ServiceError::Internal(format!("Failed to read file: {e}")))?;
-
-        let matches = self.pattern_matcher.search(&content, pattern, lang)?;
-
-        let has_matches = !matches.is_empty();
-        let file_results = if has_matches {
-            let file_hash = format!("{:x}", Sha256::digest(content.as_bytes()));
-            vec![FileMatchResult {
-                file_path: file_path.to_string(),
-                file_size_bytes: metadata.len(),
-                file_hash,
-                matches,
-            }]
-        } else {
-            vec![]
-        };
-
-        Ok(FileSearchResult {
-            matches: file_results,
-            next_cursor: Some(CursorResult {
-                last_file_path: file_path.to_string(),
-                is_complete: true,
-            }),
-            total_files_found: if has_matches { 1 } else { 0 },
-        })
+        Err(ServiceError::Internal(
+            "File path is not under any configured root directory".to_string(),
+        ))
     }
 
     pub async fn search(&self, param: SearchParam) -> Result<SearchResult, ServiceError> {
         let lang = Language::from_str(&param.language)
             .map_err(|_| ServiceError::Internal("Failed to parse language".to_string()))?;
 
-        let matches = self
-            .pattern_matcher
-            .search(&param.code, &param.pattern, lang)?;
+        let matches = self.pattern_matcher.search_with_options(
+            &param.code,
+            &param.pattern,
+            lang,
+            param.selector.as_deref(),
+            param.context.as_deref(),
+        )?;
 
-        Ok(SearchResult { matches })
+        let mut result = SearchResult {
+            matches,
+            matches_summary: None,
+        };
+
+        // Add context lines if requested
+        if param.context_before.is_some()
+            || param.context_after.is_some()
+            || param.context_lines.is_some()
+        {
+            result = add_context_to_search_result(
+                &param.code,
+                result,
+                param.context_before,
+                param.context_after,
+                param.context_lines,
+            );
+        }
+
+        Ok(result)
     }
 
     pub async fn file_search(
@@ -142,10 +170,41 @@ impl SearchService {
         // Check if this is a direct file path (not a glob pattern)
         let path = std::path::Path::new(&validated_pattern);
         if path.is_file() {
-            // Handle direct file path - must validate it's under a root directory
-            return self
-                .search_single_file(&validated_pattern, &param.pattern, lang)
-                .await;
+            // Validate the file is under a root directory
+            self.validate_file_under_roots(&validated_pattern)?;
+
+            // Get file metadata
+            let metadata = std::fs::metadata(&validated_pattern).map_err(|e| {
+                ServiceError::Internal(format!("Failed to read file metadata: {e}"))
+            })?;
+
+            // Process the single file
+            let file_result = self.process_file_search(
+                &validated_pattern,
+                metadata.len(),
+                &param.pattern,
+                lang,
+                param.selector.as_deref(),
+                param.context.as_deref(),
+                param.max_file_size,
+                param.context_before,
+                param.context_after,
+                param.context_lines,
+            );
+
+            let (matches, total_files) = match file_result {
+                Some(result) => (vec![result], 1),
+                None => (vec![], 0),
+            };
+
+            return Ok(FileSearchResult {
+                matches,
+                next_cursor: Some(CursorResult {
+                    last_file_path: validated_pattern.clone(),
+                    is_complete: true,
+                }),
+                total_files_found: total_files,
+            });
         }
 
         let glob = Glob::new(&validated_pattern)
@@ -219,25 +278,18 @@ impl SearchService {
             .into_iter()
             .filter(|(path, _)| cursor_filter.as_ref().is_none_or(|start| path > start))
             .filter_map(|(path_str, file_size)| {
-                // Read file and search for matches
-                std::fs::read_to_string(&path_str).ok().and_then(|content| {
-                    self.pattern_matcher
-                        .search(&content, &param.pattern, lang)
-                        .ok()
-                        .and_then(|matches| {
-                            if matches.is_empty() {
-                                None
-                            } else {
-                                let file_hash = format!("{:x}", Sha256::digest(content.as_bytes()));
-                                Some(FileMatchResult {
-                                    file_path: path_str,
-                                    file_size_bytes: file_size,
-                                    matches,
-                                    file_hash,
-                                })
-                            }
-                        })
-                })
+                self.process_file_search(
+                    &path_str,
+                    file_size,
+                    &param.pattern,
+                    lang,
+                    param.selector.as_deref(),
+                    param.context.as_deref(),
+                    param.max_file_size,
+                    param.context_before,
+                    param.context_after,
+                    param.context_lines,
+                )
             })
             .take(param.max_results)
             .collect();
@@ -509,11 +561,7 @@ function greet() {
     console.error("Error");
 }
 "#;
-        let param = SearchParam {
-            code: code.to_string(),
-            pattern: "console.log($VAR)".to_string(),
-            language: "javascript".to_string(),
-        };
+        let param = SearchParam::new(code, "console.log($VAR)", "javascript");
 
         let result = service.search(param).await.unwrap();
         assert_eq!(result.matches.len(), 1);
@@ -524,11 +572,7 @@ function greet() {
     async fn test_search_no_matches() {
         let (service, _temp_dir) = create_test_search_service();
         let code = "function test() { return 42; }";
-        let param = SearchParam {
-            code: code.to_string(),
-            pattern: "console.log($VAR)".to_string(),
-            language: "javascript".to_string(),
-        };
+        let param = SearchParam::new(code, "console.log($VAR)", "javascript");
 
         let result = service.search(param).await.unwrap();
         assert_eq!(result.matches.len(), 0);
@@ -537,11 +581,7 @@ function greet() {
     #[tokio::test]
     async fn test_search_invalid_language() {
         let (service, _temp_dir) = create_test_search_service();
-        let param = SearchParam {
-            code: "test".to_string(),
-            pattern: "test".to_string(),
-            language: "invalid_language".to_string(),
-        };
+        let param = SearchParam::new("test", "test", "invalid_language");
 
         let result = service.search(param).await;
         assert!(result.is_err());
@@ -578,6 +618,12 @@ function farewell() {
             max_results: 10,
             max_file_size: 1024 * 1024,
             cursor: None,
+            strictness: None,
+            selector: None,
+            context: None,
+            context_before: None,
+            context_after: None,
+            context_lines: None,
         };
 
         let result = service.file_search(param).await.unwrap();
@@ -603,6 +649,12 @@ function farewell() {
             max_results: 1,
             max_file_size: 1024 * 1024,
             cursor: None,
+            strictness: None,
+            selector: None,
+            context: None,
+            context_before: None,
+            context_after: None,
+            context_lines: None,
         };
 
         let result1 = service.file_search(param.clone()).await.unwrap();
@@ -639,6 +691,12 @@ function farewell() {
                 last_file_path: String::new(),
                 is_complete: true,
             }),
+            strictness: None,
+            selector: None,
+            context: None,
+            context_before: None,
+            context_after: None,
+            context_lines: None,
         };
 
         let result = service.file_search(param).await.unwrap();
@@ -661,6 +719,12 @@ function farewell() {
             max_results: 10,
             max_file_size: 100, // Small limit
             cursor: None,
+            strictness: None,
+            selector: None,
+            context: None,
+            context_before: None,
+            context_after: None,
+            context_lines: None,
         };
 
         let result = service.file_search(param).await.unwrap();

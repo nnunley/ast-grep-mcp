@@ -55,6 +55,12 @@ fn another_test() {
         max_results: 10,
         cursor: None,
         max_file_size: 1024 * 1024,
+        selector: None,
+        context: None,
+        strictness: None,
+        context_before: None,
+        context_after: None,
+        context_lines: None,
     };
 
     let result = service.file_search(param).await.unwrap();
@@ -112,6 +118,12 @@ fn another_function() {
         max_results: 10,
         cursor: None,
         max_file_size: 1024 * 1024,
+        selector: None,
+        context: None,
+        strictness: None,
+        context_before: None,
+        context_after: None,
+        context_lines: None,
     };
 
     let result = service.file_search(param).await.unwrap();
@@ -160,6 +172,12 @@ async fn test_single_file_outside_root_directory() {
         max_results: 10,
         cursor: None,
         max_file_size: 1024 * 1024,
+        selector: None,
+        context: None,
+        strictness: None,
+        context_before: None,
+        context_after: None,
+        context_lines: None,
     };
 
     let result = service.file_search(param).await;

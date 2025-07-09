@@ -12,7 +12,7 @@ fn test_cli_help() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("AST-Grep MCP Server"));
+    assert!(stdout.contains("Model Context Protocol server for ast-grep"));
     assert!(stdout.contains("search"));
     assert!(stdout.contains("file-search"));
     assert!(stdout.contains("rule-search"));
