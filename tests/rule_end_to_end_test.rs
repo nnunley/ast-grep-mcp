@@ -52,7 +52,7 @@ class Logger {
 
     let param = RuleSearchParam {
         rule_config,
-        path_pattern: Some(format!("{}/**/*.js", temp_dir.path().display())),
+        path_pattern: Some("**/*.js".to_string()),
         max_results: 100,
         max_file_size: 1024 * 1024,
         cursor: None,
