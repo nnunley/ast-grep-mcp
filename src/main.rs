@@ -159,27 +159,36 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     // Initialize the tracing subscriber based on mode
-    let log_level = if matches!(args.command, Some(Commands::Serve) | None) {
-        tracing::Level::DEBUG
-    } else {
-        tracing::Level::WARN // Less verbose for CLI commands
-    };
+    let is_mcp_mode = matches!(args.command, Some(Commands::Serve) | None);
 
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive(log_level.into()))
-        .with_writer(std::io::stderr)
-        .with_ansi(false)
-        .init();
+    if is_mcp_mode {
+        // For MCP mode, disable all logging to avoid interfering with JSON protocol
+        // MCP clients expect clean JSON over stdio
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                EnvFilter::from_default_env().add_directive(tracing::Level::ERROR.into()),
+            )
+            .with_writer(std::io::stderr)
+            .with_ansi(false)
+            .init();
+    } else {
+        // For CLI mode, allow normal logging
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                EnvFilter::from_default_env().add_directive(tracing::Level::WARN.into()),
+            )
+            .with_writer(std::io::stderr)
+            .with_ansi(false)
+            .init();
+    }
 
     // Create a custom config from command line arguments
     let config = create_config_from_args(args.global)?;
 
     match args.command {
         Some(Commands::Serve) | None => {
-            // Default MCP server mode
-            tracing::info!("Starting MCP server with config: {:?}", config);
+            // Default MCP server mode - no output to avoid interfering with MCP JSON protocol
             let service = AstGrepService::with_config(config).serve(stdio()).await?;
-            tracing::info!("Service started, waiting for connections");
             service.waiting().await?;
         }
         Some(command) => {
@@ -417,6 +426,276 @@ async fn get_code_content(code: Option<String>, file: Option<PathBuf>) -> Result
         }
         (None, None) => {
             anyhow::bail!("Must specify either --code or --file");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_create_config_from_args_defaults() {
+        let args = GlobalArgs {
+            root_directories: vec![],
+            max_file_size: 1024,
+            max_concurrency: 5,
+            limit: 100,
+            rules_directory: None,
+            pattern_cache_size: 500,
+        };
+
+        let config = create_config_from_args(args).unwrap();
+        assert_eq!(config.max_file_size, 1024);
+        assert_eq!(config.max_concurrency, 5);
+        assert_eq!(config.limit, 100);
+        assert_eq!(config.pattern_cache_size, 500);
+        assert!(!config.root_directories.is_empty()); // Should default to current dir
+        assert!(
+            config
+                .rules_directory
+                .to_string_lossy()
+                .contains(".ast-grep-mcp")
+        );
+    }
+
+    #[test]
+    fn test_create_config_from_args_custom() {
+        let temp_dir = TempDir::new().unwrap();
+        let custom_root = temp_dir.path().to_path_buf();
+        let custom_rules = temp_dir.path().join("rules");
+
+        let args = GlobalArgs {
+            root_directories: vec![custom_root.clone()],
+            max_file_size: 2048,
+            max_concurrency: 10,
+            limit: 200,
+            rules_directory: Some(custom_rules.clone()),
+            pattern_cache_size: 1000,
+        };
+
+        let config = create_config_from_args(args).unwrap();
+        assert_eq!(config.max_file_size, 2048);
+        assert_eq!(config.max_concurrency, 10);
+        assert_eq!(config.limit, 200);
+        assert_eq!(config.pattern_cache_size, 1000);
+        assert_eq!(config.root_directories, vec![custom_root]);
+        assert_eq!(config.rules_directory, custom_rules);
+    }
+
+    #[tokio::test]
+    async fn test_get_code_content_direct() {
+        let result = get_code_content(Some("test code".to_string()), None)
+            .await
+            .unwrap();
+        assert_eq!(result, "test code");
+    }
+
+    #[tokio::test]
+    async fn test_get_code_content_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("test.txt");
+        fs::write(&test_file, "file content").unwrap();
+
+        let result = get_code_content(None, Some(test_file)).await.unwrap();
+        assert_eq!(result, "file content");
+    }
+
+    #[tokio::test]
+    async fn test_get_code_content_both_specified() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("test.txt");
+        fs::write(&test_file, "file content").unwrap();
+
+        let result = get_code_content(Some("code".to_string()), Some(test_file)).await;
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Cannot specify both")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_code_content_neither_specified() {
+        let result = get_code_content(None, None).await;
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Must specify either")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_code_content_nonexistent_file() {
+        let result = get_code_content(None, Some(PathBuf::from("/nonexistent/file.txt"))).await;
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_global_args_parsing() {
+        // Test that the clap parser accepts the expected arguments
+        use clap::Parser;
+
+        let args = Args::try_parse_from([
+            "ast-grep-mcp",
+            "--root-dir",
+            "/tmp",
+            "--max-file-size",
+            "1000000",
+            "--max-concurrency",
+            "5",
+            "--limit",
+            "500",
+            "--pattern-cache-size",
+            "2000",
+            "search",
+            "--pattern",
+            "test",
+            "--language",
+            "javascript",
+            "--code",
+            "test",
+        ])
+        .unwrap();
+
+        assert_eq!(args.global.root_directories, vec![PathBuf::from("/tmp")]);
+        assert_eq!(args.global.max_file_size, 1000000);
+        assert_eq!(args.global.max_concurrency, 5);
+        assert_eq!(args.global.limit, 500);
+        assert_eq!(args.global.pattern_cache_size, 2000);
+
+        if let Some(Commands::Search {
+            pattern,
+            language,
+            code,
+            file,
+        }) = args.command
+        {
+            assert_eq!(pattern, "test");
+            assert_eq!(language, "javascript");
+            assert_eq!(code, Some("test".to_string()));
+            assert_eq!(file, None);
+        } else {
+            panic!("Expected Search command");
+        }
+    }
+
+    #[test]
+    fn test_commands_parsing() {
+        use clap::Parser;
+
+        // Test FileSearch command
+        let args = Args::try_parse_from([
+            "ast-grep-mcp",
+            "file-search",
+            "--pattern",
+            "console.log",
+            "--language",
+            "javascript",
+            "--path-pattern",
+            "**/*.js",
+            "--max-results",
+            "50",
+        ])
+        .unwrap();
+
+        if let Some(Commands::FileSearch {
+            pattern,
+            language,
+            path_pattern,
+            max_results,
+        }) = args.command
+        {
+            assert_eq!(pattern, "console.log");
+            assert_eq!(language, "javascript");
+            assert_eq!(path_pattern, "**/*.js");
+            assert_eq!(max_results, 50);
+        } else {
+            panic!("Expected FileSearch command");
+        }
+
+        // Test RuleSearch command
+        let args = Args::try_parse_from([
+            "ast-grep-mcp",
+            "rule-search",
+            "--rule",
+            "/path/to/rule.yaml",
+            "--path-pattern",
+            "src/**",
+            "--max-results",
+            "100",
+        ])
+        .unwrap();
+
+        if let Some(Commands::RuleSearch {
+            rule,
+            path_pattern,
+            max_results,
+        }) = args.command
+        {
+            assert_eq!(rule, PathBuf::from("/path/to/rule.yaml"));
+            assert_eq!(path_pattern, Some("src/**".to_string()));
+            assert_eq!(max_results, 100);
+        } else {
+            panic!("Expected RuleSearch command");
+        }
+
+        // Test RuleReplace command
+        let args = Args::try_parse_from([
+            "ast-grep-mcp",
+            "rule-replace",
+            "--rule",
+            "/path/to/rule.yaml",
+            "--apply",
+            "--summary-only",
+        ])
+        .unwrap();
+
+        if let Some(Commands::RuleReplace {
+            rule,
+            path_pattern,
+            apply,
+            summary_only,
+            max_results,
+        }) = args.command
+        {
+            assert_eq!(rule, PathBuf::from("/path/to/rule.yaml"));
+            assert_eq!(path_pattern, None);
+            assert!(apply);
+            assert!(summary_only);
+            assert_eq!(max_results, 100); // default
+        } else {
+            panic!("Expected RuleReplace command");
+        }
+
+        // Test GenerateAst command
+        let args = Args::try_parse_from([
+            "ast-grep-mcp",
+            "generate-ast",
+            "--language",
+            "rust",
+            "--file",
+            "/path/to/file.rs",
+        ])
+        .unwrap();
+
+        if let Some(Commands::GenerateAst {
+            language,
+            code,
+            file,
+        }) = args.command
+        {
+            assert_eq!(language, "rust");
+            assert_eq!(code, None);
+            assert_eq!(file, Some(PathBuf::from("/path/to/file.rs")));
+        } else {
+            panic!("Expected GenerateAst command");
         }
     }
 }

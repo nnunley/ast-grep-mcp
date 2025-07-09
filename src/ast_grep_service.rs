@@ -3,6 +3,7 @@ use crate::config::ServiceConfig;
 use crate::errors::ServiceError;
 use crate::pattern::PatternMatcher;
 use crate::replace::ReplaceService;
+use crate::response_formatter::ResponseFormatter;
 use crate::rules::*;
 use crate::rules::{CatalogManager, RuleEvaluator, RuleService, RuleStorage};
 use crate::search::SearchService;
@@ -1505,9 +1506,9 @@ impl ServerHandler for AstGrepService {
                 ))
                 .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
                 let result = self.search(param).await.map_err(ErrorData::from)?;
-                let json_value = serde_json::to_value(&result)
-                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))?;
-                Ok(CallToolResult::success(vec![Content::json(json_value)?]))
+                let summary = ResponseFormatter::format_search_result(&result);
+                ResponseFormatter::create_formatted_response(&result, summary)
+                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
             }
             "file_search" => {
                 let param: FileSearchParam = serde_json::from_value(serde_json::Value::Object(
@@ -1515,9 +1516,9 @@ impl ServerHandler for AstGrepService {
                 ))
                 .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
                 let result = self.file_search(param).await.map_err(ErrorData::from)?;
-                let json_value = serde_json::to_value(&result)
-                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))?;
-                Ok(CallToolResult::success(vec![Content::json(json_value)?]))
+                let summary = ResponseFormatter::format_file_search_result(&result);
+                ResponseFormatter::create_formatted_response(&result, summary)
+                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
             }
             "replace" => {
                 let param: ReplaceParam = serde_json::from_value(serde_json::Value::Object(
@@ -1525,9 +1526,9 @@ impl ServerHandler for AstGrepService {
                 ))
                 .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
                 let result = self.replace(param).await.map_err(ErrorData::from)?;
-                let json_value = serde_json::to_value(&result)
-                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))?;
-                Ok(CallToolResult::success(vec![Content::json(json_value)?]))
+                let summary = ResponseFormatter::format_replace_result(&result);
+                ResponseFormatter::create_formatted_response(&result, summary)
+                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
             }
             "file_replace" => {
                 let param: FileReplaceParam = serde_json::from_value(serde_json::Value::Object(
@@ -1535,9 +1536,9 @@ impl ServerHandler for AstGrepService {
                 ))
                 .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
                 let result = self.file_replace(param).await.map_err(ErrorData::from)?;
-                let json_value = serde_json::to_value(&result)
-                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))?;
-                Ok(CallToolResult::success(vec![Content::json(json_value)?]))
+                let summary = ResponseFormatter::format_file_replace_result(&result);
+                ResponseFormatter::create_formatted_response(&result, summary)
+                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
             }
             "list_languages" => {
                 let param: ListLanguagesParam = serde_json::from_value(serde_json::Value::Object(
@@ -1545,9 +1546,9 @@ impl ServerHandler for AstGrepService {
                 ))
                 .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
                 let result = self.list_languages(param).await.map_err(ErrorData::from)?;
-                let json_value = serde_json::to_value(&result)
-                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))?;
-                Ok(CallToolResult::success(vec![Content::json(json_value)?]))
+                let summary = ResponseFormatter::format_list_languages_result(&result);
+                ResponseFormatter::create_formatted_response(&result, summary)
+                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
             }
             "documentation" => {
                 let param: DocumentationParam = serde_json::from_value(serde_json::Value::Object(
@@ -1555,9 +1556,9 @@ impl ServerHandler for AstGrepService {
                 ))
                 .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
                 let result = self.documentation(param).await.map_err(ErrorData::from)?;
-                let json_value = serde_json::to_value(&result)
-                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))?;
-                Ok(CallToolResult::success(vec![Content::json(json_value)?]))
+                let summary = ResponseFormatter::format_documentation_result(&result);
+                ResponseFormatter::create_formatted_response(&result, summary)
+                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
             }
             "validate_rule" => {
                 let param: RuleValidateParam = serde_json::from_value(serde_json::Value::Object(
@@ -1565,9 +1566,9 @@ impl ServerHandler for AstGrepService {
                 ))
                 .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
                 let result = self.validate_rule(param).await.map_err(ErrorData::from)?;
-                let json_value = serde_json::to_value(&result)
-                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))?;
-                Ok(CallToolResult::success(vec![Content::json(json_value)?]))
+                let summary = ResponseFormatter::format_rule_validate_result(&result);
+                ResponseFormatter::create_formatted_response(&result, summary)
+                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
             }
             "rule_search" => {
                 let param: RuleSearchParam = serde_json::from_value(serde_json::Value::Object(
@@ -1575,19 +1576,19 @@ impl ServerHandler for AstGrepService {
                 ))
                 .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
                 let result = self.rule_search(param).await.map_err(ErrorData::from)?;
-                let json_value = serde_json::to_value(&result)
-                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))?;
-                Ok(CallToolResult::success(vec![Content::json(json_value)?]))
+                let summary = ResponseFormatter::format_file_search_result(&result);
+                ResponseFormatter::create_formatted_response(&result, summary)
+                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
             }
             "rule_replace" => {
                 let param: RuleReplaceParam = serde_json::from_value(serde_json::Value::Object(
                     request.arguments.unwrap_or_default(),
                 ))
-                .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
+                .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))?;
                 let result = self.rule_replace(param).await.map_err(ErrorData::from)?;
-                let json_value = serde_json::to_value(&result)
-                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))?;
-                Ok(CallToolResult::success(vec![Content::json(json_value)?]))
+                let summary = ResponseFormatter::format_file_replace_result(&result);
+                ResponseFormatter::create_formatted_response(&result, summary)
+                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
             }
             "create_rule" => {
                 let param: CreateRuleParam = serde_json::from_value(serde_json::Value::Object(
@@ -1661,9 +1662,9 @@ impl ServerHandler for AstGrepService {
                 ))
                 .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
                 let result = self.generate_ast(param).await.map_err(ErrorData::from)?;
-                let json_value = serde_json::to_value(&result)
-                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))?;
-                Ok(CallToolResult::success(vec![Content::json(json_value)?]))
+                let summary = ResponseFormatter::format_generate_ast_result(&result);
+                ResponseFormatter::create_formatted_response(&result, summary)
+                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
             }
             _ => Err(ErrorData::method_not_found::<
                 rmcp::model::CallToolRequestMethod,
