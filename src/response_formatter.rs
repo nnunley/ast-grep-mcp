@@ -20,6 +20,52 @@ impl ResponseFormatter {
         Ok(CallToolResult::success(contents))
     }
 
+    /// Create a lightweight formatted response for large results (summary only)
+    pub fn create_lightweight_response_for_file_search(
+        result: &FileSearchResult,
+        summary: String,
+    ) -> Result<CallToolResult, Box<dyn std::error::Error + Send + Sync>> {
+        // For large results, only return the summary to avoid token limits
+        // Include minimal JSON data with cursor information for pagination
+        let mut minimal_json = serde_json::json!({
+            "summary": "Full JSON data omitted due to size - use smaller max_results or pagination",
+            "total_files_found": result.total_files_found,
+            "files_in_response": result.matches.len(),
+            "has_more": result.next_cursor.as_ref().is_some_and(|c| !c.is_complete)
+        });
+
+        if let Some(cursor) = &result.next_cursor {
+            minimal_json["next_cursor"] = serde_json::json!({
+                "last_file_path": cursor.last_file_path,
+                "is_complete": cursor.is_complete
+            });
+        }
+
+        let contents = vec![Content::text(summary), Content::json(minimal_json)?];
+
+        Ok(CallToolResult::success(contents))
+    }
+
+    /// Create a lightweight formatted response for large results (summary only)
+    pub fn create_lightweight_response<T>(
+        _result: &T,
+        summary: String,
+    ) -> Result<CallToolResult, Box<dyn std::error::Error + Send + Sync>>
+    where
+        T: serde::Serialize,
+    {
+        // For large results, only return the summary to avoid token limits
+        // Include minimal JSON data for pagination cursors
+        let minimal_json = serde_json::json!({
+            "summary": "Full JSON data omitted due to size - use smaller max_results or pagination",
+            "has_more": true
+        });
+
+        let contents = vec![Content::text(summary), Content::json(minimal_json)?];
+
+        Ok(CallToolResult::success(contents))
+    }
+
     /// Format a file search result with a readable summary
     pub fn format_file_search_result(result: &FileSearchResult) -> String {
         let total_matches: usize = result.matches.iter().map(|f| f.matches.len()).sum();
@@ -73,7 +119,12 @@ impl ResponseFormatter {
         // Add pagination info
         if let Some(cursor) = &result.next_cursor {
             if !cursor.is_complete {
-                summary.push_str("\n📄 **More results available** - use cursor for pagination");
+                summary.push_str(&format!(
+                    "\n📄 **More results available** - use cursor for pagination:\n```json\n{{\n  \"cursor\": {{\n    \"last_file_path\": \"{}\",\n    \"is_complete\": false\n  }}\n}}\n```",
+                    cursor.last_file_path
+                ));
+            } else {
+                summary.push_str("\n✅ **Search complete** - all results have been returned");
             }
         }
 

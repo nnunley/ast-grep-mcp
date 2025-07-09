@@ -34,7 +34,7 @@ impl ToolService {
                             "path_pattern": { "type": "string" },
                             "pattern": { "type": "string" },
                             "language": { "type": "string" },
-                            "max_results": { "type": "integer", "minimum": 1, "maximum": 100 },
+                            "max_results": { "type": "integer", "minimum": 1, "maximum": 50, "default": 20 },
                             "max_file_size": { "type": "integer", "minimum": 1024, "maximum": 1073741824 },
                             "cursor": {
                                 "type": "object",
