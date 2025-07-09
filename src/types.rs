@@ -11,6 +11,7 @@
 //! - **Replace Types**: [`ReplaceParam`], [`ReplaceResult`], [`ChangeResult`]
 //! - **File Replace Types**: [`FileReplaceParam`], [`FileReplaceResult`], [`FileDiffResult`]
 //! - **Pattern Suggestion Types**: [`SuggestPatternsParam`], [`SuggestPatternsResult`]
+//! - **Debug Types**: [`DebugPatternParam`], [`DebugAstParam`], [`DebugFormat`]
 //! - **Utility Types**: [`MatchStrictness`], [`CursorParam`], [`GenerateAstParam`]
 //!
 //! ## Important Notes
@@ -723,6 +724,127 @@ pub struct GenerateAstResult {
     pub code_length: usize,
     /// All Tree-sitter node kinds found (e.g., ["function_declaration", "identifier"])
     pub node_kinds: Vec<String>,
+}
+
+/// Debug format type for pattern and AST visualization.
+///
+/// Different debug formats provide different levels of detail:
+/// - `Pattern`: Shows how the pattern is parsed and interpreted
+/// - `Ast`: Shows the Abstract Syntax Tree (semantic structure)
+/// - `Cst`: Shows the Concrete Syntax Tree (all tokens and trivia)
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DebugFormat {
+    /// Show pattern parsing and matching structure
+    Pattern,
+    /// Show Abstract Syntax Tree (semantic nodes only)
+    Ast,
+    /// Show Concrete Syntax Tree (all tokens including whitespace)
+    Cst,
+}
+
+/// Parameters for pattern debugging functionality.
+///
+/// This helps users understand how their patterns are parsed and what they match against.
+///
+/// # Example
+///
+/// ```rust
+/// use ast_grep_mcp::{DebugPatternParam, DebugFormat};
+///
+/// let param = DebugPatternParam {
+///     pattern: "$FN($ARG)".to_string(),
+///     language: "javascript".to_string(),
+///     sample_code: Some("console.log('test')".to_string()),
+///     format: DebugFormat::Pattern,
+/// };
+/// ```
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DebugPatternParam {
+    /// The ast-grep pattern to debug
+    pub pattern: String,
+    /// Programming language for the pattern
+    pub language: String,
+    /// Optional sample code to test the pattern against
+    pub sample_code: Option<String>,
+    /// Debug format type
+    pub format: DebugFormat,
+}
+
+/// Result containing pattern debug information.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DebugPatternResult {
+    /// The original pattern that was debugged
+    pub pattern: String,
+    /// Programming language
+    pub language: String,
+    /// Debug format used
+    pub format: DebugFormat,
+    /// Detailed debug information
+    pub debug_info: String,
+    /// If sample code was provided, show matches
+    pub sample_matches: Option<Vec<MatchResult>>,
+    /// Explanation of what the pattern matches
+    pub explanation: String,
+}
+
+/// Enhanced parameters for AST generation with debug options.
+///
+/// Extends the basic GenerateAstParam with additional debug formatting options.
+///
+/// # Example
+///
+/// ```rust
+/// use ast_grep_mcp::{DebugAstParam, DebugFormat};
+///
+/// let param = DebugAstParam {
+///     code: "function test() { return 42; }".to_string(),
+///     language: "javascript".to_string(),
+///     format: DebugFormat::Cst,
+///     include_trivia: true,
+/// };
+/// ```
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DebugAstParam {
+    /// Source code to parse into AST
+    pub code: String,
+    /// Programming language for parsing
+    pub language: String,
+    /// Debug format type (AST or CST)
+    pub format: DebugFormat,
+    /// Include trivia (whitespace, comments) in CST format
+    #[serde(default = "default_true")]
+    pub include_trivia: bool,
+}
+
+/// Enhanced result containing detailed AST/CST information.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DebugAstResult {
+    /// String representation of the syntax tree
+    pub tree: String,
+    /// The programming language that was parsed
+    pub language: String,
+    /// Debug format used
+    pub format: DebugFormat,
+    /// Length of the input code in characters
+    pub code_length: usize,
+    /// All Tree-sitter node kinds found
+    pub node_kinds: Vec<String>,
+    /// Tree statistics
+    pub tree_stats: TreeStats,
+}
+
+/// Statistics about the parsed syntax tree.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TreeStats {
+    /// Total number of nodes in the tree
+    pub total_nodes: usize,
+    /// Number of leaf nodes (terminals)
+    pub leaf_nodes: usize,
+    /// Maximum depth of the tree
+    pub max_depth: usize,
+    /// Number of error nodes
+    pub error_nodes: usize,
 }
 
 /// Parameters for importing a rule from the ast-grep catalog.

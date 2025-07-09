@@ -250,6 +250,48 @@ impl ToolService {
                         "required": ["code", "language"]
                     })).unwrap()),
                 },
+                Tool {
+                    name: "debug_pattern".into(),
+                    description: "Debug ast-grep patterns to understand their structure and behavior. Shows pattern analysis, metavariables, and optionally tests against sample code.".into(),
+                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "pattern": { "type": "string", "description": "The ast-grep pattern to debug" },
+                            "language": { "type": "string", "description": "Programming language for the pattern" },
+                            "sample_code": { "type": "string", "description": "Optional sample code to test the pattern against" },
+                            "format": {
+                                "type": "string",
+                                "enum": ["pattern", "ast", "cst"],
+                                "default": "pattern",
+                                "description": "Debug format: 'pattern' for pattern analysis, 'ast' for AST view, 'cst' for CST view"
+                            }
+                        },
+                        "required": ["pattern", "language"]
+                    })).unwrap()),
+                },
+                Tool {
+                    name: "debug_ast".into(),
+                    description: "Generate enhanced AST/CST debug information with statistics and detailed tree structure analysis.".into(),
+                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "code": { "type": "string", "description": "Source code to parse into AST/CST" },
+                            "language": { "type": "string", "description": "Programming language for parsing" },
+                            "format": {
+                                "type": "string",
+                                "enum": ["ast", "cst"],
+                                "default": "ast",
+                                "description": "Debug format: 'ast' for Abstract Syntax Tree, 'cst' for Concrete Syntax Tree"
+                            },
+                            "include_trivia": {
+                                "type": "boolean",
+                                "default": true,
+                                "description": "Include trivia (whitespace, comments) in CST format"
+                            }
+                        },
+                        "required": ["code", "language"]
+                    })).unwrap()),
+                },
             ],
             ..Default::default()
         }

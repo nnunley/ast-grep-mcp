@@ -54,6 +54,7 @@ pub mod ast_grep_service;
 pub mod ast_utils;
 pub mod config;
 pub mod context_lines;
+pub mod debug;
 pub mod errors;
 pub mod path_validation;
 pub mod pattern;

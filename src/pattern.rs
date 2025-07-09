@@ -1,5 +1,6 @@
 use crate::errors::ServiceError;
 use crate::types::MatchResult;
+use ast_grep_core::tree_sitter::StrDoc;
 use ast_grep_core::{AstGrep, Pattern};
 use ast_grep_language::SupportLang as Language;
 use lru::LruCache;
@@ -167,5 +168,72 @@ impl PatternMatcher {
         }
 
         Ok(pattern)
+    }
+
+    /// Generate AST debug string representation of code.
+    pub fn generate_ast_debug_string(
+        &self,
+        code: &str,
+        lang: Language,
+    ) -> Result<String, ServiceError> {
+        let ast_grep = AstGrep::new(code, lang);
+        let root = ast_grep.root();
+
+        // Create a simple text representation of the AST
+        Ok(Self::format_node_simple(root, 0))
+    }
+
+    /// Generate CST (Concrete Syntax Tree) debug string with all tokens.
+    pub fn generate_cst_debug_string(
+        &self,
+        code: &str,
+        lang: Language,
+    ) -> Result<String, ServiceError> {
+        // For now, CST will be similar to AST but we'll include more detail
+        let ast_grep = AstGrep::new(code, lang);
+        let root = ast_grep.root();
+
+        Ok(Self::format_node_detailed(root, 0))
+    }
+
+    /// Format a node with simple information.
+    fn format_node_simple(node: ast_grep_core::Node<StrDoc<Language>>, depth: usize) -> String {
+        let indent = "  ".repeat(depth);
+        let mut result = String::new();
+
+        // Add node information
+        result.push_str(&format!("{}({})\n", indent, node.kind()));
+
+        // Add children
+        for child in node.children() {
+            result.push_str(&Self::format_node_simple(child, depth + 1));
+        }
+
+        result
+    }
+
+    /// Format a node with detailed information including text.
+    fn format_node_detailed(node: ast_grep_core::Node<StrDoc<Language>>, depth: usize) -> String {
+        let indent = "  ".repeat(depth);
+        let mut result = String::new();
+
+        // Add node information
+        result.push_str(&format!("{}({}", indent, node.kind()));
+
+        // Show text for leaf nodes
+        if node.children().count() == 0 {
+            let text = node.text();
+            if !text.is_empty() {
+                result.push_str(&format!(" \"{}\"", text.replace('\n', "\\n")));
+            }
+        }
+        result.push_str(")\n");
+
+        // Add children
+        for child in node.children() {
+            result.push_str(&Self::format_node_detailed(child, depth + 1));
+        }
+
+        result
     }
 }

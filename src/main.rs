@@ -39,8 +39,9 @@ use std::path::PathBuf;
 use tracing_subscriber::{self, filter::EnvFilter};
 
 use ast_grep_mcp::{
-    GenerateAstParam, RuleReplaceParam, RuleSearchParam, SearchParam,
-    ast_grep_service::AstGrepService, config::ServiceConfig, types::*,
+    DebugAstParam, DebugFormat, DebugPatternParam, GenerateAstParam, RuleReplaceParam,
+    RuleSearchParam, SearchParam, ast_grep_service::AstGrepService, config::ServiceConfig,
+    types::*,
 };
 
 /// AST-Grep MCP Server - Structural code search and transformation
@@ -183,6 +184,39 @@ enum Commands {
         /// File to analyze
         #[arg(short, long)]
         file: Option<PathBuf>,
+    },
+    /// Debug ast-grep patterns to understand their structure and behavior
+    DebugPattern {
+        /// Pattern to debug
+        #[arg(short, long)]
+        pattern: String,
+        /// Programming language
+        #[arg(short, long)]
+        language: String,
+        /// Optional sample code to test pattern against
+        #[arg(long)]
+        sample_code: Option<String>,
+        /// Debug format: pattern, ast, or cst
+        #[arg(long, default_value = "pattern")]
+        format: String,
+    },
+    /// Generate enhanced AST/CST debug information with statistics
+    DebugAst {
+        /// Programming language
+        #[arg(short, long)]
+        language: String,
+        /// Code to analyze (use - for stdin)
+        #[arg(long)]
+        code: Option<String>,
+        /// File to analyze
+        #[arg(short, long)]
+        file: Option<PathBuf>,
+        /// Debug format: ast or cst
+        #[arg(long, default_value = "ast")]
+        format: String,
+        /// Include trivia (whitespace, comments) in CST format
+        #[arg(long, default_value = "true")]
+        include_trivia: bool,
     },
 }
 
@@ -459,6 +493,107 @@ async fn run_cli_command(command: Commands, config: ServiceConfig) -> Result<()>
             println!("Available node kinds: {}", result.node_kinds.join(", "));
             println!("\nAST structure:");
             println!("{}", result.ast);
+        }
+        Commands::DebugPattern {
+            pattern,
+            language,
+            sample_code,
+            format,
+        } => {
+            let debug_format = match format.as_str() {
+                "pattern" => DebugFormat::Pattern,
+                "ast" => DebugFormat::Ast,
+                "cst" => DebugFormat::Cst,
+                _ => {
+                    eprintln!("Invalid format: {format}. Must be 'pattern', 'ast', or 'cst'");
+                    std::process::exit(1);
+                }
+            };
+
+            let param = DebugPatternParam {
+                pattern,
+                language,
+                sample_code,
+                format: debug_format,
+            };
+
+            let result = service.debug_pattern(param).await?;
+            println!("🔍 Pattern Debug Analysis");
+            println!("Pattern: {}", result.pattern);
+            println!("Language: {}", result.language);
+            println!("Format: {:?}\n", result.format);
+
+            println!("📊 Analysis Results:");
+            println!("{}", result.debug_info);
+
+            println!("💡 Explanation:");
+            println!("{}", result.explanation);
+
+            if let Some(ref matches) = result.sample_matches {
+                println!("\n✅ Sample Code Testing:");
+                if matches.is_empty() {
+                    println!("  No matches found in sample code");
+                } else {
+                    println!("  Found {} match(es) in sample code:", matches.len());
+                    for (i, match_result) in matches.iter().take(5).enumerate() {
+                        println!("  {}. {}", i + 1, match_result.text);
+                    }
+                    if matches.len() > 5 {
+                        println!("  ... and {} more matches", matches.len() - 5);
+                    }
+                }
+            }
+        }
+        Commands::DebugAst {
+            language,
+            code,
+            file,
+            format,
+            include_trivia,
+        } => {
+            let code_content = get_code_content(code, file).await?;
+            let debug_format = match format.as_str() {
+                "ast" => DebugFormat::Ast,
+                "cst" => DebugFormat::Cst,
+                _ => {
+                    eprintln!("Invalid format: {format}. Must be 'ast' or 'cst'");
+                    std::process::exit(1);
+                }
+            };
+
+            let param = DebugAstParam {
+                code: code_content,
+                language,
+                format: debug_format,
+                include_trivia,
+            };
+
+            let result = service.debug_ast(param).await?;
+            println!("🌳 AST Debug Analysis");
+            println!("Language: {}", result.language);
+            println!("Format: {:?}", result.format);
+            println!("Code Length: {} characters\n", result.code_length);
+
+            println!("📊 Tree Statistics:");
+            println!("  Total Nodes: {}", result.tree_stats.total_nodes);
+            println!("  Leaf Nodes: {}", result.tree_stats.leaf_nodes);
+            println!("  Max Depth: {}", result.tree_stats.max_depth);
+            println!("  Error Nodes: {}\n", result.tree_stats.error_nodes);
+
+            println!("🏷️ Node Types Found:");
+            if result.node_kinds.is_empty() {
+                println!("  No node types detected");
+            } else {
+                for (i, node_kind) in result.node_kinds.iter().take(10).enumerate() {
+                    println!("  {}. {}", i + 1, node_kind);
+                }
+                if result.node_kinds.len() > 10 {
+                    println!("  ... and {} more node types", result.node_kinds.len() - 10);
+                }
+            }
+
+            println!("\n🌲 Syntax Tree:");
+            println!("{}", result.tree);
         }
     }
 
