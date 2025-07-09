@@ -320,6 +320,54 @@ impl ResponseFormatter {
             details
         )
     }
+
+    /// Format suggest patterns result with a readable summary
+    pub fn format_suggest_patterns_result(result: &SuggestPatternsResult) -> String {
+        if result.suggestions.is_empty() {
+            return "🔍 **No pattern suggestions found**\n\nNo patterns could be suggested for the provided code examples.".to_string();
+        }
+
+        let mut summary = format!(
+            "🔍 **Pattern Suggestions**\n\n📊 **Total**: {} suggestions for {} code\n",
+            result.suggestions.len(),
+            result.language
+        );
+
+        // Add pattern details
+        for (i, suggestion) in result.suggestions.iter().enumerate() {
+            summary.push_str(&format!(
+                "\n**Pattern {}**: `{}`\n",
+                i + 1,
+                suggestion.pattern
+            ));
+
+            summary.push_str(&format!(
+                "   📈 **Confidence**: {:.1}%\n",
+                suggestion.confidence * 100.0
+            ));
+
+            summary.push_str(&format!(
+                "   🎯 **Specificity**: {:?}\n",
+                suggestion.specificity
+            ));
+
+            if !suggestion.explanation.is_empty() {
+                summary.push_str(&format!(
+                    "   📝 **Explanation**: {}\n",
+                    suggestion.explanation
+                ));
+            }
+
+            if !suggestion.matching_examples.is_empty() {
+                summary.push_str(&format!(
+                    "   ✅ **Matches examples**: {:?}\n",
+                    suggestion.matching_examples
+                ));
+            }
+        }
+
+        summary
+    }
 }
 
 // Helper trait to convert strings to title case

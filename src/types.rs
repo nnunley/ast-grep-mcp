@@ -4,6 +4,39 @@ use ast_grep_language::SupportLang as Language;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+// Suggest patterns types
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SuggestPatternsParam {
+    pub code_examples: Vec<String>,
+    pub language: String,
+    pub max_suggestions: Option<usize>,
+    pub specificity_levels: Option<Vec<String>>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SuggestPatternsResult {
+    pub suggestions: Vec<PatternSuggestion>,
+    pub language: String,
+    pub total_suggestions: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PatternSuggestion {
+    pub pattern: String,
+    pub confidence: f64,
+    pub specificity: SpecificityLevel,
+    pub explanation: String,
+    pub matching_examples: Vec<usize>,
+    pub node_kinds: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum SpecificityLevel {
+    Exact,
+    Specific,
+    General,
+}
+
 // Basic search and replace types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchParam {
