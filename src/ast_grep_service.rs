@@ -1598,7 +1598,7 @@ impl ServerHandler for AstGrepService {
                             "path_pattern": { "type": "string" },
                             "pattern": { "type": "string" },
                             "language": { "type": "string" },
-                            "max_results": { "type": "integer", "minimum": 1, "maximum": 100 },
+                            "max_results": { "type": "integer", "minimum": 1, "maximum": 50, "default": 20 },
                             "max_file_size": { "type": "integer", "minimum": 1024, "maximum": 1073741824 },
                             "cursor": {
                                 "type": "object",
@@ -1835,8 +1835,16 @@ impl ServerHandler for AstGrepService {
                 .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
                 let result = self.file_search(param).await.map_err(ErrorData::from)?;
                 let summary = ResponseFormatter::format_file_search_result(&result);
-                ResponseFormatter::create_formatted_response(&result, summary)
-                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
+
+                // Use lightweight response for large results to avoid token limits
+                let total_matches: usize = result.matches.iter().map(|f| f.matches.len()).sum();
+                if result.matches.len() > 10 || total_matches > 50 {
+                    ResponseFormatter::create_lightweight_response_for_file_search(&result, summary)
+                        .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
+                } else {
+                    ResponseFormatter::create_formatted_response(&result, summary)
+                        .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
+                }
             }
             "replace" => {
                 let param: ReplaceParam = serde_json::from_value(serde_json::Value::Object(

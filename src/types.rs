@@ -298,7 +298,7 @@ pub struct ImportCatalogRuleResult {
 
 // Default functions for serde
 fn default_max_results() -> usize {
-    100
+    20
 }
 fn default_max_results_large() -> usize {
     10000
@@ -351,7 +351,7 @@ mod tests {
             ..Default::default()
         };
 
-        assert_eq!(param.max_results, 100);
+        assert_eq!(param.max_results, 20);
         assert_eq!(param.max_file_size, 50 * 1024 * 1024);
         assert!(param.cursor.is_none());
     }
@@ -546,7 +546,7 @@ mod tests {
 
     #[test]
     fn test_default_functions() {
-        assert_eq!(default_max_results(), 100);
+        assert_eq!(default_max_results(), 20);
         assert_eq!(default_max_results_large(), 10000);
         assert_eq!(default_max_file_size(), 50 * 1024 * 1024);
         assert!(default_true());

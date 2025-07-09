@@ -129,6 +129,40 @@ async fn test_file_search_pagination_complete_cursor() {
 }
 
 #[tokio::test]
+async fn test_file_search_large_results_lightweight_response() {
+    let temp_dir = TempDir::new().unwrap();
+    let config = ServiceConfig {
+        root_directories: vec![temp_dir.path().to_path_buf()],
+        ..Default::default()
+    };
+    let service = AstGrepService::with_config(config);
+
+    // Create 15 test files (more than the 10 file threshold)
+    for i in 0..15 {
+        let file_path = temp_dir.path().join(format!("test{i:02}.js"));
+        fs::write(&file_path, format!("console.log('file {i}');")).unwrap();
+    }
+
+    // Search with default parameters - should trigger lightweight response
+    let param = FileSearchParam {
+        path_pattern: "**/*.js".to_string(),
+        pattern: "console.log($VAR)".to_string(),
+        language: "javascript".to_string(),
+        max_results: 50, // High limit to get all files
+        ..Default::default()
+    };
+
+    let result = service.file_search(param).await.unwrap();
+
+    // Should get all 15 files
+    assert_eq!(result.matches.len(), 15);
+    assert_eq!(result.total_files_found, 15);
+
+    // Should have complete cursor since we got all results
+    assert!(result.next_cursor.as_ref().unwrap().is_complete);
+}
+
+#[tokio::test]
 async fn test_file_replace_pagination() {
     let temp_dir = TempDir::new().unwrap();
     let config = ServiceConfig {
