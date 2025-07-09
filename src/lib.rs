@@ -5,6 +5,7 @@ pub mod errors;
 pub mod path_validation;
 pub mod pattern;
 pub mod replace;
+pub mod response_formatter;
 pub mod rules;
 pub mod search;
 pub mod tools;
