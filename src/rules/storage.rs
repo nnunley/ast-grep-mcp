@@ -43,8 +43,10 @@ impl RuleStorage {
 
         let file_path = primary_dir.join(format!("{}.yaml", rule.id));
 
-        // Check if file already exists and overwrite is false
-        if file_path.exists() && !param.overwrite {
+        // Check if file already exists
+        let is_update = file_path.exists();
+
+        if is_update && !param.overwrite {
             return Err(ServiceError::Internal(format!(
                 "Rule '{}' already exists. Use overwrite=true to replace it.",
                 rule.id
@@ -56,7 +58,7 @@ impl RuleStorage {
 
         Ok(CreateRuleResult {
             rule_id: rule.id,
-            created: true,
+            created: !is_update, // false if updating existing rule
             file_path: file_path.to_string_lossy().to_string(),
         })
     }

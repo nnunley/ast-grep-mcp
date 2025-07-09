@@ -95,8 +95,9 @@ impl InjectionConfig {
             embedded_config: EmbeddedLanguageConfig {
                 host_language: "html".to_string(),
                 embedded_language: "css".to_string(),
-                extraction_pattern: "<style$ATTRS>$CSS_CODE</style>".to_string(),
-                selector: Some("style_element".to_string()),
+                // Use a simpler pattern that captures the style content
+                extraction_pattern: "<style>$CSS_CODE</style>".to_string(),
+                selector: None,
                 context: None,
             },
             is_automatic: true,
