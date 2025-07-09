@@ -31,6 +31,79 @@ impl SearchService {
         }
     }
 
+    async fn search_single_file(
+        &self,
+        file_path: &str,
+        pattern: &str,
+        lang: Language,
+    ) -> Result<FileSearchResult, ServiceError> {
+        let path = std::path::Path::new(file_path);
+
+        // Validate that the file is under one of the configured root directories
+        let canonical_path = path
+            .canonicalize()
+            .map_err(|e| ServiceError::Internal(format!("Failed to canonicalize path: {e}")))?;
+
+        let mut is_under_root = false;
+        for root_dir in &self.config.root_directories {
+            if let Ok(canonical_root) = std::path::Path::new(root_dir).canonicalize() {
+                if canonical_path.starts_with(&canonical_root) {
+                    is_under_root = true;
+                    break;
+                }
+            }
+        }
+
+        if !is_under_root {
+            return Err(ServiceError::Internal(
+                "File path is not under any configured root directory".to_string(),
+            ));
+        }
+
+        // Check file size
+        let metadata = std::fs::metadata(file_path)
+            .map_err(|e| ServiceError::Internal(format!("Failed to read file metadata: {e}")))?;
+
+        if metadata.len() > self.config.max_file_size {
+            return Ok(FileSearchResult {
+                matches: vec![],
+                next_cursor: Some(CursorResult {
+                    last_file_path: file_path.to_string(),
+                    is_complete: true,
+                }),
+                total_files_found: 0,
+            });
+        }
+
+        // Read and search the file
+        let content = std::fs::read_to_string(file_path)
+            .map_err(|e| ServiceError::Internal(format!("Failed to read file: {e}")))?;
+
+        let matches = self.pattern_matcher.search(&content, pattern, lang)?;
+
+        let has_matches = !matches.is_empty();
+        let file_results = if has_matches {
+            let file_hash = format!("{:x}", Sha256::digest(content.as_bytes()));
+            vec![FileMatchResult {
+                file_path: file_path.to_string(),
+                file_size_bytes: metadata.len(),
+                file_hash,
+                matches,
+            }]
+        } else {
+            vec![]
+        };
+
+        Ok(FileSearchResult {
+            matches: file_results,
+            next_cursor: Some(CursorResult {
+                last_file_path: file_path.to_string(),
+                is_complete: true,
+            }),
+            total_files_found: if has_matches { 1 } else { 0 },
+        })
+    }
+
     pub async fn search(&self, param: SearchParam) -> Result<SearchResult, ServiceError> {
         let lang = Language::from_str(&param.language)
             .map_err(|_| ServiceError::Internal("Failed to parse language".to_string()))?;
@@ -65,6 +138,15 @@ impl SearchService {
 
         // Validate the path pattern for security
         let validated_pattern = validate_path_pattern(&param.path_pattern)?;
+
+        // Check if this is a direct file path (not a glob pattern)
+        let path = std::path::Path::new(&validated_pattern);
+        if path.is_file() {
+            // Handle direct file path - must validate it's under a root directory
+            return self
+                .search_single_file(&validated_pattern, &param.pattern, lang)
+                .await;
+        }
 
         let glob = Glob::new(&validated_pattern)
             .map_err(|e| ServiceError::Internal(format!("Invalid glob pattern: {e}")))?;
