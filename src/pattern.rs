@@ -41,8 +41,23 @@ impl PatternMatcher {
         pattern: &str,
         lang: Language,
     ) -> Result<Vec<MatchResult>, ServiceError> {
+        self.search_with_options(code, pattern, lang, None, None)
+    }
+
+    pub fn search_with_options(
+        &self,
+        code: &str,
+        pattern: &str,
+        lang: Language,
+        selector: Option<&str>,
+        context: Option<&str>,
+    ) -> Result<Vec<MatchResult>, ServiceError> {
         let ast = AstGrep::new(code, lang);
-        let pattern = self.get_or_create_pattern(pattern, lang)?;
+        let pattern = if let (Some(selector), Some(context)) = (selector, context) {
+            self.get_or_create_contextual_pattern(pattern, selector, context, lang)?
+        } else {
+            self.get_or_create_pattern(pattern, lang)?
+        };
 
         let matches: Vec<MatchResult> = ast
             .root()
@@ -60,8 +75,24 @@ impl PatternMatcher {
         replacement: &str,
         lang: Language,
     ) -> Result<String, ServiceError> {
+        self.replace_with_options(code, pattern, replacement, lang, None, None)
+    }
+
+    pub fn replace_with_options(
+        &self,
+        code: &str,
+        pattern: &str,
+        replacement: &str,
+        lang: Language,
+        selector: Option<&str>,
+        context: Option<&str>,
+    ) -> Result<String, ServiceError> {
         let ast = AstGrep::new(code, lang);
-        let pattern = self.get_or_create_pattern(pattern, lang)?;
+        let pattern = if let (Some(selector), Some(context)) = (selector, context) {
+            self.get_or_create_contextual_pattern(pattern, selector, context, lang)?
+        } else {
+            self.get_or_create_pattern(pattern, lang)?
+        };
 
         // Apply replacements
         let edits = ast.root().replace_all(pattern, replacement);
@@ -97,6 +128,37 @@ impl PatternMatcher {
 
         // Create new pattern
         let pattern = Pattern::new(pattern_str, lang);
+
+        // Store in cache
+        {
+            let mut cache = self.pattern_cache.lock().unwrap();
+            cache.put(cache_key, pattern.clone());
+        }
+
+        Ok(pattern)
+    }
+
+    fn get_or_create_contextual_pattern(
+        &self,
+        pattern_str: &str,
+        selector: &str,
+        context: &str,
+        lang: Language,
+    ) -> Result<Pattern, ServiceError> {
+        let cache_key = format!("{lang}:{context}:{selector}:{pattern_str}");
+
+        // Try to get from cache first
+        {
+            let mut cache = self.pattern_cache.lock().unwrap();
+            if let Some(pattern) = cache.get(&cache_key) {
+                return Ok(pattern.clone());
+            }
+        }
+
+        // Create new contextual pattern
+        let pattern = Pattern::contextual(context, selector, lang).map_err(|e| {
+            ServiceError::Internal(format!("Failed to create contextual pattern: {e}"))
+        })?;
 
         // Store in cache
         {

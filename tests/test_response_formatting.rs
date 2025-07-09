@@ -16,6 +16,8 @@ fn test_search_result_formatting() {
                 start_col: 0,
                 end_col: 20,
                 vars: vars.clone(),
+                context_before: None,
+                context_after: None,
             },
             MatchResult {
                 text: "console.log('world')".to_string(),
@@ -24,8 +26,11 @@ fn test_search_result_formatting() {
                 start_col: 0,
                 end_col: 20,
                 vars: HashMap::new(),
+                context_before: None,
+                context_after: None,
             },
         ],
+        matches_summary: None,
     };
 
     let summary = ResponseFormatter::format_search_result(&result);
@@ -40,7 +45,10 @@ fn test_search_result_formatting() {
 
 #[test]
 fn test_search_result_no_matches() {
-    let result = SearchResult { matches: vec![] };
+    let result = SearchResult {
+        matches: vec![],
+        matches_summary: None,
+    };
 
     let summary = ResponseFormatter::format_search_result(&result);
 
@@ -61,6 +69,8 @@ fn test_file_search_result_formatting() {
                 start_col: 4,
                 end_col: 23,
                 vars: HashMap::new(),
+                context_before: None,
+                context_after: None,
             }],
             file_hash: "abc123".to_string(),
         }],

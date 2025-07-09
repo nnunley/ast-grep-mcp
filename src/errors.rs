@@ -1,18 +1,37 @@
+//! # Error Types
+//!
+//! Error handling for the ast-grep MCP service.
+//! Provides structured error types that can be converted to MCP ErrorData.
+
 use rmcp::model::ErrorData;
 use std::fmt;
 use std::path::PathBuf;
 
+/// Error types that can occur during ast-grep MCP service operations.
+///
+/// These errors cover parsing, I/O, and internal service failures.
+/// All errors implement conversion to MCP `ErrorData` for proper error reporting.
 #[derive(Debug)]
 pub enum ServiceError {
+    /// Error parsing ast-grep patterns or rules
     ParserError(String),
+    /// Internal service error with custom message
     Internal(String),
+    /// I/O error reading/writing files
     Io(std::io::Error),
+    /// Error walking directory trees during file search
     WalkDir(walkdir::Error),
+    /// Error parsing YAML rule configurations
     SerdeYaml(serde_yaml::Error),
+    /// Error parsing JSON data
     SerdeJson(serde_json::Error),
+    /// Regular expression compilation error
     Regex(regex::Error),
+    /// Requested file not found
     FileNotFound(PathBuf),
+    /// Glob pattern compilation error
     Glob(globset::Error),
+    /// MCP tool not found
     ToolNotFound(String),
 }
 

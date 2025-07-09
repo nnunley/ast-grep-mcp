@@ -1,5 +1,27 @@
+//! # Service Configuration
+//!
+//! Configuration structures and defaults for the ast-grep MCP service.
+//! These settings control performance, resource limits, and file system access.
+
 use std::path::PathBuf;
 
+/// Configuration for the ast-grep MCP service.
+///
+/// Controls various aspects of service behavior including resource limits,
+/// file system access, and performance tuning.
+///
+/// # Example
+///
+/// ```rust
+/// use ast_grep_mcp::config::ServiceConfig;
+/// use std::path::PathBuf;
+///
+/// let config = ServiceConfig {
+///     max_file_size: 10 * 1024 * 1024, // 10MB limit
+///     root_directories: vec![PathBuf::from("src")],
+///     ..Default::default()
+/// };
+/// ```
 #[derive(Debug, Clone)]
 pub struct ServiceConfig {
     /// Maximum file size to process (in bytes)
@@ -17,6 +39,15 @@ pub struct ServiceConfig {
 }
 
 impl Default for ServiceConfig {
+    /// Create a ServiceConfig with sensible defaults.
+    ///
+    /// Default values:
+    /// - `max_file_size`: 50MB
+    /// - `max_concurrency`: 10 concurrent operations
+    /// - `limit`: 100 results per search
+    /// - `root_directories`: Current working directory
+    /// - `rules_directory`: `.ast-grep-rules` in current directory
+    /// - `pattern_cache_size`: 1000 cached compiled patterns
     fn default() -> Self {
         Self {
             max_file_size: 50 * 1024 * 1024, // 50MB

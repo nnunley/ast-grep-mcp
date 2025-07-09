@@ -53,7 +53,7 @@ impl Default for AstGrepService {
 impl AstGrepService {
     fn parse_language(&self, lang_str: &str) -> Result<Language, ServiceError> {
         Language::from_str(lang_str)
-            .map_err(|_| ServiceError::Internal("Failed to parse language".into()))
+            .map_err(|_| ServiceError::Internal("Failed to parse language".to_string()))
     }
 
     /// Extract unique Tree-sitter node kinds from the given code
@@ -103,7 +103,7 @@ impl AstGrepService {
                     pattern: "console.log($MSG)".to_string(),
                     confidence: 0.9,
                     specificity: SpecificityLevel::General,
-                    explanation: "Pattern for console.log with variable message".to_string(),
+                    explanation: "Pattern for console.log with variable message. Use selector: \"call_expression\" to match only function calls, or context: \"function $NAME() { $PATTERN }\" to match only within functions.".to_string(),
                     matching_examples: (0..examples.len()).collect(),
                     node_kinds: vec!["call_expression".to_string(), "string".to_string()],
                 }));
@@ -131,7 +131,7 @@ impl AstGrepService {
                     pattern: "function get$TYPE() {}".to_string(),
                     confidence: 0.8,
                     specificity: SpecificityLevel::Specific,
-                    explanation: "Pattern for getter functions".to_string(),
+                    explanation: "Pattern for getter functions. Use selector: \"function_declaration\" to match only function declarations, or context: \"class $CLASS { $PATTERN }\" to match only within classes.".to_string(),
                     matching_examples: (0..examples.len()).collect(),
                     node_kinds: vec!["function_declaration".to_string(), "identifier".to_string()],
                 }));
@@ -142,7 +142,7 @@ impl AstGrepService {
                 pattern: "function $NAME() {}".to_string(),
                 confidence: 0.7,
                 specificity: SpecificityLevel::General,
-                explanation: "Pattern for function declarations".to_string(),
+                explanation: "Pattern for function declarations. Use selector: \"function_declaration\" to match only function declarations, or context: \"class $CLASS { $PATTERN }\" to match only within classes.".to_string(),
                 matching_examples: (0..examples.len()).collect(),
                 node_kinds: vec!["function_declaration".to_string(), "identifier".to_string()],
             }));
@@ -164,7 +164,7 @@ impl AstGrepService {
                     pattern: "if (user.$PROP === $VALUE) { return $RESULT; }".to_string(),
                     confidence: 0.8,
                     specificity: SpecificityLevel::Specific,
-                    explanation: "Pattern for user property comparisons".to_string(),
+                    explanation: "Pattern for user property comparisons. Use selector: \"if_statement\" to match only if statements, or context: \"function $NAME() { $PATTERN }\" to match only within functions.".to_string(),
                     matching_examples: (0..examples.len()).collect(),
                     node_kinds: vec![
                         "if_statement".to_string(),
@@ -179,7 +179,7 @@ impl AstGrepService {
                 pattern: "if ($OBJ.$PROP === $VALUE) { return $RESULT; }".to_string(),
                 confidence: 0.7,
                 specificity: SpecificityLevel::General,
-                explanation: "Pattern for object property comparisons".to_string(),
+                explanation: "Pattern for object property comparisons. Use selector: \"if_statement\" to match only if statements, or context: \"function $NAME() { $PATTERN }\" to match only within functions.".to_string(),
                 matching_examples: (0..examples.len()).collect(),
                 node_kinds: vec![
                     "if_statement".to_string(),
@@ -203,7 +203,7 @@ impl AstGrepService {
                     pattern: "const $VAR = $FUNC(); console.log($VAR.$PROP);".to_string(),
                     confidence: 0.8,
                     specificity: SpecificityLevel::Specific,
-                    explanation: "Pattern for variable assignment and property access logging"
+                    explanation: "Pattern for variable assignment and property access logging. Use selector: \"variable_declaration\" to match only variable declarations, or context: \"function $NAME() { $PATTERN }\" to match only within functions."
                         .to_string(),
                     matching_examples: (0..examples.len()).collect(),
                     node_kinds: vec![
@@ -226,7 +226,7 @@ impl AstGrepService {
                     pattern: "class $NAMEService { constructor() {} }".to_string(),
                     confidence: 0.8,
                     specificity: SpecificityLevel::Specific,
-                    explanation: "Pattern for service class declarations".to_string(),
+                    explanation: "Pattern for service class declarations. Use selector: \"class_declaration\" to match only class declarations, or context: \"export $PATTERN\" to match only exported classes.".to_string(),
                     matching_examples: (0..examples.len()).collect(),
                     node_kinds: vec![
                         "class_declaration".to_string(),
@@ -240,7 +240,7 @@ impl AstGrepService {
                 pattern: "class $NAME { constructor() {} }".to_string(),
                 confidence: 0.7,
                 specificity: SpecificityLevel::General,
-                explanation: "Pattern for class declarations with constructor".to_string(),
+                explanation: "Pattern for class declarations with constructor. Use selector: \"class_declaration\" to match only class declarations, or context: \"export $PATTERN\" to match only exported classes.".to_string(),
                 matching_examples: (0..examples.len()).collect(),
                 node_kinds: vec![
                     "class_declaration".to_string(),
@@ -267,7 +267,7 @@ impl AstGrepService {
                             .to_string(),
                     confidence: 0.8,
                     specificity: SpecificityLevel::Specific,
-                    explanation: "Pattern for for loop array iteration with function call"
+                    explanation: "Pattern for for loop array iteration with function call. Use selector: \"for_statement\" to match only for loops, or context: \"function $NAME() { $PATTERN }\" to match only within functions."
                         .to_string(),
                     matching_examples: (0..examples.len()).collect(),
                     node_kinds: vec![
@@ -277,6 +277,43 @@ impl AstGrepService {
                     ],
                 }));
             }
+        }
+
+        // If no specific patterns matched, try to generate selector-based suggestions
+        self.generate_selector_suggestions(examples)
+    }
+
+    fn generate_selector_suggestions(
+        &self,
+        examples: &[String],
+    ) -> Result<Option<PatternSuggestion>, ServiceError> {
+        // Check if examples contain field assignments that would benefit from selector
+        if examples.iter().all(|code| {
+            code.contains(" = ") && (code.contains("class ") || code.contains("interface "))
+        }) {
+            return Ok(Some(PatternSuggestion {
+                pattern: "$VAR = $VALUE".to_string(),
+                confidence: 0.6,
+                specificity: SpecificityLevel::General,
+                explanation: "General assignment pattern. Use selector: \"field_definition\" to match only class/interface fields, or selector: \"assignment_expression\" to match only assignments, or context: \"class $CLASS { $PATTERN }\" to match only within classes.".to_string(),
+                matching_examples: (0..examples.len()).collect(),
+                node_kinds: vec!["assignment_expression".to_string(), "field_definition".to_string()],
+            }));
+        }
+
+        // Check if examples contain method calls that would benefit from selector
+        if examples
+            .iter()
+            .all(|code| code.contains("(") && code.contains(")"))
+        {
+            return Ok(Some(PatternSuggestion {
+                pattern: "$FUNC($ARGS)".to_string(),
+                confidence: 0.6,
+                specificity: SpecificityLevel::General,
+                explanation: "General function call pattern. Use selector: \"call_expression\" to match only function calls, or selector: \"method_call\" to match only method calls, or context: \"function $NAME() { $PATTERN }\" to match only within functions.".to_string(),
+                matching_examples: (0..examples.len()).collect(),
+                node_kinds: vec!["call_expression".to_string(), "method_call".to_string()],
+            }));
         }
 
         Ok(None)
@@ -405,7 +442,7 @@ impl AstGrepService {
         // Validate rule has at least one condition
         if !self.has_rule_condition(&config.rule) {
             return Err(ServiceError::ParserError(
-                "Rule must have at least one condition".into(),
+                "Rule must have at least one condition".to_string(),
             ));
         }
 
@@ -825,7 +862,7 @@ Replaces patterns within files matching a glob pattern. Supports bulk refactorin
 {
   "path_pattern": "src/**/*.rs",
   "pattern": "\"$STRING\".to_string()",
-  "replacement": "\"$STRING\".into()",
+  "replacement": "\"$STRING\"",
   "language": "rust",
   "summary_only": true,
   "dry_run": true
@@ -838,7 +875,7 @@ Returns: `{"files_with_changes": [["src/main.rs", 15], ["src/lib.rs", 8]], "tota
 {
   "path_pattern": "src/**/*.rs",
   "pattern": "\"$STRING\".to_string()",
-  "replacement": "\"$STRING\".into()",
+  "replacement": "\"$STRING\"",
   "language": "rust",
   "summary_only": true,
   "include_samples": true,
@@ -852,7 +889,7 @@ Returns: `{"files_with_changes": [["src/main.rs", 15], ["src/lib.rs", 8]], "tota
 {
   "path_pattern": "src/**/*.rs",
   "pattern": "\"$STRING\".to_string()",
-  "replacement": "\"$STRING\".into()",
+  "replacement": "\"$STRING\"",
   "language": "rust",
   "summary_only": true,
   "dry_run": false
@@ -1222,11 +1259,7 @@ Always check the response for error conditions before processing results.
         {
             match self.parse_language(&config.language) {
                 Ok(_lang) => {
-                    let search_param = SearchParam {
-                        code: test_code.clone(),
-                        pattern: pattern_str,
-                        language: config.language.clone(),
-                    };
+                    let search_param = SearchParam::new(test_code, &pattern_str, &config.language);
 
                     match self.search(search_param).await {
                         Ok(result) => {
@@ -1250,7 +1283,7 @@ Always check the response for error conditions before processing results.
                 }
             }
         } else if param.test_code.is_some() && !errors.is_empty() {
-            warnings.push("Test code provided but rule has errors".into());
+            warnings.push("Test code provided but rule has errors".to_string());
         }
 
         Ok(RuleValidateResult {
@@ -1543,14 +1576,14 @@ impl ServerHandler for AstGrepService {
         InitializeResult {
             protocol_version: ProtocolVersion::LATEST,
             server_info: Implementation {
-                name: "ast-grep-mcp".into(),
-                version: "0.1.0".into(),
+                name: "ast-grep-mcp".to_string(),
+                version: "0.1.0".to_string(),
             },
             capabilities: ServerCapabilities {
                 tools: Some(rmcp::model::ToolsCapability { list_changed: Some(true) }),
                 ..Default::default()
             },
-            instructions: Some("This MCP server provides tools for structural code search and transformation using ast-grep. For bulk refactoring, use file_replace with summary_only=true to avoid token limits. Use the `documentation` tool for detailed examples.".into()),
+            instructions: Some("This MCP server provides tools for structural code search and transformation using ast-grep. For bulk refactoring, use file_replace with summary_only=true to avoid token limits. Use the `documentation` tool for detailed examples.".to_string()),
         }
     }
 
@@ -1563,13 +1596,13 @@ impl ServerHandler for AstGrepService {
         Ok(ListToolsResult {
             tools: vec![
                 Tool {
-                    name: "search".into(),
-                    description: "Search for patterns in code using ast-grep.".into(),
+                    name: Cow::Borrowed("search"),
+                    description: Cow::Borrowed("Search for patterns in code using ast-grep."),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({ "type": "object", "properties": { "code": { "type": "string" }, "pattern": { "type": "string" }, "language": { "type": "string" } } })).unwrap()),
                 },
                 Tool {
-                    name: "suggest_patterns".into(),
-                    description: "Suggest ast-grep patterns based on code examples.".into(),
+                    name: Cow::Borrowed("suggest_patterns"),
+                    description: Cow::Borrowed("Suggest ast-grep patterns based on code examples."),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({
                         "type": "object",
                         "properties": {
@@ -1590,8 +1623,8 @@ impl ServerHandler for AstGrepService {
                     })).unwrap()),
                 },
                 Tool {
-                    name: "file_search".into(),
-                    description: "Search for patterns in a file using ast-grep.".into(),
+                    name: Cow::Borrowed("file_search"),
+                    description: Cow::Borrowed("Search for patterns in a file using ast-grep."),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({
                         "type": "object",
                         "properties": {
@@ -1613,13 +1646,13 @@ impl ServerHandler for AstGrepService {
                     })).unwrap()),
                 },
                 Tool {
-                    name: "replace".into(),
-                    description: "Replace patterns in code.".into(),
+                    name: Cow::Borrowed("replace"),
+                    description: Cow::Borrowed("Replace patterns in code."),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({ "type": "object", "properties": { "code": { "type": "string" }, "pattern": { "type": "string" }, "replacement": { "type": "string" }, "language": { "type": "string" } } })).unwrap()),
                 },
                 Tool {
-                    name: "file_replace".into(),
-                    description: "Replace patterns in files. Use summary_only=true for bulk refactoring to avoid token limits. Returns change counts or line diffs.".into(),
+                    name: Cow::Borrowed("file_replace"),
+                    description: Cow::Borrowed("Replace patterns in files. Use summary_only=true for bulk refactoring to avoid token limits. Returns change counts or line diffs."),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({
                         "type": "object",
                         "properties": {
@@ -1646,18 +1679,18 @@ impl ServerHandler for AstGrepService {
                     })).unwrap()),
                 },
                 Tool {
-                    name: "list_languages".into(),
-                    description: "List all supported programming languages.".into(),
+                    name: Cow::Borrowed("list_languages"),
+                    description: Cow::Borrowed("List all supported programming languages."),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({ "type": "object", "properties": {} })).unwrap()),
                 },
                 Tool {
-                    name: "documentation".into(),
-                    description: "Provides detailed usage examples for all tools.".into(),
+                    name: Cow::Borrowed("documentation"),
+                    description: Cow::Borrowed("Provides detailed usage examples for all tools."),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({ "type": "object", "properties": {} })).unwrap()),
                 },
                 Tool {
-                    name: "rule_search".into(),
-                    description: "Search for patterns using ast-grep rule configurations (YAML/JSON). Supports complex pattern matching with relational and composite rules.".into(),
+                    name: Cow::Borrowed("rule_search"),
+                    description: Cow::Borrowed("Search for patterns using ast-grep rule configurations (YAML/JSON). Supports complex pattern matching with relational and composite rules."),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({
                         "type": "object",
                         "properties": {
@@ -1678,8 +1711,8 @@ impl ServerHandler for AstGrepService {
                     })).unwrap()),
                 },
                 Tool {
-                    name: "rule_replace".into(),
-                    description: "Replace patterns using ast-grep rule configurations with fix transformations. Supports complex rule-based code refactoring.".into(),
+                    name: Cow::Borrowed("rule_replace"),
+                    description: Cow::Borrowed("Replace patterns using ast-grep rule configurations with fix transformations. Supports complex rule-based code refactoring."),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({
                         "type": "object",
                         "properties": {
@@ -1702,8 +1735,8 @@ impl ServerHandler for AstGrepService {
                     })).unwrap()),
                 },
                 Tool {
-                    name: "validate_rule".into(),
-                    description: "Validate ast-grep rule configuration syntax and optionally test against sample code.".into(),
+                    name: Cow::Borrowed("validate_rule"),
+                    description: Cow::Borrowed("Validate ast-grep rule configuration syntax and optionally test against sample code."),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({
                         "type": "object",
                         "properties": {
@@ -1714,8 +1747,8 @@ impl ServerHandler for AstGrepService {
                     })).unwrap()),
                 },
                 Tool {
-                    name: "create_rule".into(),
-                    description: "Create and store a new ast-grep rule configuration for reuse. LLMs can use this to build custom rule libraries.".into(),
+                    name: Cow::Borrowed("create_rule"),
+                    description: Cow::Borrowed("Create and store a new ast-grep rule configuration for reuse. LLMs can use this to build custom rule libraries."),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({
                         "type": "object",
                         "properties": {
@@ -1726,8 +1759,8 @@ impl ServerHandler for AstGrepService {
                     })).unwrap()),
                 },
                 Tool {
-                    name: "list_rules".into(),
-                    description: "List all stored rule configurations with optional filtering by language or severity.".into(),
+                    name: Cow::Borrowed("list_rules"),
+                    description: Cow::Borrowed("List all stored rule configurations with optional filtering by language or severity."),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({
                         "type": "object",
                         "properties": {
@@ -1737,8 +1770,8 @@ impl ServerHandler for AstGrepService {
                     })).unwrap()),
                 },
                 Tool {
-                    name: "get_rule".into(),
-                    description: "Retrieve a specific stored rule configuration by ID.".into(),
+                    name: Cow::Borrowed("get_rule"),
+                    description: Cow::Borrowed("Retrieve a specific stored rule configuration by ID."),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({
                         "type": "object",
                         "properties": {
@@ -1748,8 +1781,8 @@ impl ServerHandler for AstGrepService {
                     })).unwrap()),
                 },
                 Tool {
-                    name: "delete_rule".into(),
-                    description: "Delete a stored rule configuration by ID.".into(),
+                    name: Cow::Borrowed("delete_rule"),
+                    description: Cow::Borrowed("Delete a stored rule configuration by ID."),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({
                         "type": "object",
                         "properties": {
@@ -1759,8 +1792,8 @@ impl ServerHandler for AstGrepService {
                     })).unwrap()),
                 },
                 Tool {
-                    name: "list_catalog_rules".into(),
-                    description: "List available rules from the ast-grep catalog with optional filtering.".into(),
+                    name: Cow::Borrowed("list_catalog_rules"),
+                    description: Cow::Borrowed("List available rules from the ast-grep catalog with optional filtering."),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({
                         "type": "object",
                         "properties": {
@@ -1770,8 +1803,8 @@ impl ServerHandler for AstGrepService {
                     })).unwrap()),
                 },
                 Tool {
-                    name: "import_catalog_rule".into(),
-                    description: "Import a rule from the ast-grep catalog into local storage.".into(),
+                    name: Cow::Borrowed("import_catalog_rule"),
+                    description: Cow::Borrowed("Import a rule from the ast-grep catalog into local storage."),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({
                         "type": "object",
                         "properties": {
@@ -1782,8 +1815,8 @@ impl ServerHandler for AstGrepService {
                     })).unwrap()),
                 },
                 Tool {
-                    name: "generate_ast".into(),
-                    description: "Generate a stringified syntax tree for code using Tree-sitter. Useful for debugging patterns and understanding AST structure.".into(),
+                    name: Cow::Borrowed("generate_ast"),
+                    description: Cow::Borrowed("Generate a stringified syntax tree for code using Tree-sitter. Useful for debugging patterns and understanding AST structure."),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({
                         "type": "object",
                         "properties": {
@@ -2006,11 +2039,11 @@ mod tests {
     #[tokio::test]
     async fn test_search_basic() {
         let service = AstGrepService::new();
-        let param = SearchParam {
-            code: "function greet() { console.log(\"Hello\"); }".to_string(),
-            pattern: "console.log($VAR)".into(),
-            language: "javascript".into(),
-        };
+        let param = SearchParam::new(
+            "function greet() { console.log(\"Hello\"); }",
+            "console.log($VAR)",
+            "javascript",
+        );
 
         let result = service.search(param).await.unwrap();
         assert_eq!(result.matches.len(), 1);
@@ -2024,11 +2057,11 @@ mod tests {
     #[tokio::test]
     async fn test_search_no_matches() {
         let service = AstGrepService::new();
-        let param = SearchParam {
-            code: "function greet() { alert(\"Hello\"); }".to_string(),
-            pattern: "console.log($VAR)".into(),
-            language: "javascript".into(),
-        };
+        let param = SearchParam::new(
+            "function greet() { alert(\"Hello\"); }",
+            "console.log($VAR)",
+            "javascript",
+        );
 
         let result = service.search(param).await.unwrap();
         assert_eq!(result.matches.len(), 0);
@@ -2037,11 +2070,11 @@ mod tests {
     #[tokio::test]
     async fn test_search_invalid_language() {
         let service = AstGrepService::new();
-        let param = SearchParam {
-            code: "function greet() { console.log(\"Hello\"); }".to_string(),
-            pattern: "console.log($VAR)".into(),
-            language: "invalid_language".into(),
-        };
+        let param = SearchParam::new(
+            "function greet() { console.log(\"Hello\"); }",
+            "console.log($VAR)",
+            "invalid_language",
+        );
 
         let result = service.search(param).await;
         assert!(result.is_err());
@@ -2051,12 +2084,12 @@ mod tests {
     #[tokio::test]
     async fn test_replace_basic() {
         let service = AstGrepService::new();
-        let param = ReplaceParam {
-            code: "function oldName() { console.log(\"Hello\"); }".to_string(),
-            pattern: "function oldName()".into(),
-            replacement: "function newName()".into(),
-            language: "javascript".into(),
-        };
+        let param = ReplaceParam::new(
+            "function oldName() { console.log(\"Hello\"); }",
+            "function oldName()",
+            "function newName()",
+            "javascript",
+        );
 
         let result = service.replace(param).await.unwrap();
         assert!(result.new_code.contains("function newName()"));
@@ -2066,12 +2099,12 @@ mod tests {
     #[tokio::test]
     async fn test_replace_with_vars() {
         let service = AstGrepService::new();
-        let param = ReplaceParam {
-            code: "const x = 5; const y = 10;".into(),
-            pattern: "const $VAR = $VAL".into(),
-            replacement: "let $VAR = $VAL".into(),
-            language: "javascript".into(),
-        };
+        let param = ReplaceParam::new(
+            "const x = 5; const y = 10;",
+            "const $VAR = $VAL",
+            "let $VAR = $VAL",
+            "javascript",
+        );
 
         let result = service.replace(param).await.unwrap();
         assert!(result.new_code.contains("let x = 5"));
@@ -2082,12 +2115,12 @@ mod tests {
     #[tokio::test]
     async fn test_replace_multiple_occurrences() {
         let service = AstGrepService::new();
-        let param = ReplaceParam {
-            code: "let a = 1; let b = 2; let c = 3;".into(),
-            pattern: "let $VAR = $VAL".into(),
-            replacement: "const $VAR = $VAL".into(),
-            language: "javascript".into(),
-        };
+        let param = ReplaceParam::new(
+            "let a = 1; let b = 2; let c = 3;",
+            "let $VAR = $VAL",
+            "const $VAR = $VAL",
+            "javascript",
+        );
         let result = service.replace(param).await.unwrap();
         assert_eq!(result.new_code, "const a = 1; const b = 2; const c = 3;");
     }
@@ -2095,11 +2128,11 @@ mod tests {
     #[tokio::test]
     async fn test_rust_pattern_matching() {
         let service = AstGrepService::new();
-        let param = SearchParam {
-            code: "fn main() { println!(\"Hello, world!\"); }".to_string(),
-            pattern: "println!($VAR)".into(),
-            language: "rust".into(),
-        };
+        let param = SearchParam::new(
+            "fn main() { println!(\"Hello, world!\"); }",
+            "println!($VAR)",
+            "rust",
+        );
 
         let result = service.search(param).await.unwrap();
         assert_eq!(result.matches.len(), 1);
@@ -2175,11 +2208,11 @@ mod tests {
     #[tokio::test]
     async fn test_multiple_matches() {
         let service = AstGrepService::new();
-        let param = SearchParam {
-            code: "console.log(\"Hello\"); console.log(\"World\"); alert(\"test\");".to_string(),
-            pattern: "console.log($VAR)".into(),
-            language: "javascript".into(),
-        };
+        let param = SearchParam::new(
+            "console.log(\"Hello\"); console.log(\"World\"); alert(\"test\");",
+            "console.log($VAR)",
+            "javascript",
+        );
 
         let result = service.search(param).await.unwrap();
         assert_eq!(result.matches.len(), 2);
@@ -2196,12 +2229,11 @@ mod tests {
     #[tokio::test]
     async fn test_complex_pattern() {
         let service = AstGrepService::new();
-        let param = SearchParam {
-            code: "function test(a, b) { return a + b; } function add(x, y) { return x + y; }"
-                .into(),
-            pattern: "function $NAME($PARAM1, $PARAM2) { return $PARAM1 + $PARAM2; }".into(),
-            language: "javascript".into(),
-        };
+        let param = SearchParam::new(
+            "function test(a, b) { return a + b; } function add(x, y) { return x + y; }",
+            "function $NAME($PARAM1, $PARAM2) { return $PARAM1 + $PARAM2; }",
+            "javascript",
+        );
 
         let result = service.search(param).await.unwrap();
         assert_eq!(result.matches.len(), 2);
@@ -2223,11 +2255,7 @@ mod tests {
     #[tokio::test]
     async fn test_invalid_language_error() {
         let service = AstGrepService::new();
-        let param = SearchParam {
-            code: "let x = 1;".into(),
-            pattern: "let x = 1;".into(),
-            language: "not_a_real_language".into(),
-        };
+        let param = SearchParam::new("let x = 1;", "let x = 1;", "not_a_real_language");
         let result = service.search(param).await;
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -2237,11 +2265,11 @@ mod tests {
     #[tokio::test]
     async fn test_pattern_caching() {
         let service = AstGrepService::new();
-        let param = SearchParam {
-            code: "console.log(\"test\"); console.log(\"another\");".into(),
-            pattern: "console.log($VAR)".into(),
-            language: "javascript".into(),
-        };
+        let param = SearchParam::new(
+            "console.log(\"test\"); console.log(\"another\");",
+            "console.log($VAR)",
+            "javascript",
+        );
 
         // Run the same search twice
         let result1 = service.search(param.clone()).await.unwrap();
@@ -2270,21 +2298,17 @@ mod tests {
 
         // Add first pattern
         let _ = service
-            .search(SearchParam {
-                code: code.into(),
-                pattern: "console.log($VAR)".into(),
-                language: "javascript".into(),
-            })
+            .search(SearchParam::new(code, "console.log($VAR)", "javascript"))
             .await
             .unwrap();
 
         // Add second pattern
         let _ = service
-            .search(SearchParam {
-                code: code.into(),
-                pattern: "console.$METHOD($VAR)".into(),
-                language: "javascript".into(),
-            })
+            .search(SearchParam::new(
+                code,
+                "console.$METHOD($VAR)",
+                "javascript",
+            ))
             .await
             .unwrap();
 
@@ -2295,11 +2319,7 @@ mod tests {
 
         // Add third pattern - should evict least recently used
         let _ = service
-            .search(SearchParam {
-                code: code.into(),
-                pattern: "$OBJECT.log($VAR)".into(),
-                language: "javascript".into(),
-            })
+            .search(SearchParam::new(code, "$OBJECT.log($VAR)", "javascript"))
             .await
             .unwrap();
 
@@ -2313,8 +2333,8 @@ mod tests {
     async fn test_generate_ast() {
         let service = AstGrepService::new();
         let param = GenerateAstParam {
-            code: "function test() { return 42; }".into(),
-            language: "javascript".into(),
+            code: "function test() { return 42; }".to_string(),
+            language: "javascript".to_string(),
         };
 
         let result = service.generate_ast(param).await.unwrap();

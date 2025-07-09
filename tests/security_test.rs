@@ -41,6 +41,12 @@ async fn test_path_traversal_blocked() {
             max_results: 10,
             max_file_size: 1024 * 1024,
             cursor: None,
+            strictness: None,
+            selector: None,
+            context: None,
+            context_before: None,
+            context_after: None,
+            context_lines: None,
         };
 
         let result = service.file_search(param).await;
@@ -93,6 +99,12 @@ async fn test_absolute_path_outside_root_blocked() {
         max_results: 10,
         max_file_size: 1024 * 1024,
         cursor: None,
+        strictness: None,
+        selector: None,
+        context: None,
+        context_before: None,
+        context_after: None,
+        context_lines: None,
     };
 
     let result = service.file_search(param).await;
@@ -127,6 +139,12 @@ async fn test_valid_patterns_still_work() {
             max_results: 10,
             max_file_size: 1024 * 1024,
             cursor: None,
+            strictness: None,
+            selector: None,
+            context: None,
+            context_before: None,
+            context_after: None,
+            context_lines: None,
         };
 
         let result = service.file_search(param).await.unwrap();

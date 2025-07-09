@@ -1,3 +1,37 @@
+//! # ast-grep MCP Service Binary
+//!
+//! This is the main binary for the ast-grep MCP (Model Context Protocol) service.
+//! It provides both MCP server functionality and CLI commands for testing and debugging.
+//!
+//! ## Usage Modes
+//!
+//! ### MCP Server Mode (Default)
+//! ```bash
+//! ast-grep-mcp
+//! # or explicitly:
+//! ast-grep-mcp serve
+//! ```
+//!
+//! ### CLI Testing Mode
+//! ```bash
+//! # Search for patterns in code
+//! ast-grep-mcp search --pattern "console.log($VAR)" --language javascript --code "console.log('hello')"
+//!
+//! # Search across files
+//! ast-grep-mcp file-search --pattern "fn $NAME($ARGS)" --language rust --path-pattern "src/**/*.rs"
+//!
+//! # Generate AST for debugging patterns
+//! ast-grep-mcp generate-ast --language javascript --code "function test() {}"
+//! ```
+//!
+//! ## Configuration
+//!
+//! The service can be configured via command-line arguments:
+//! - `--root-dir`: Specify search directories (can be used multiple times)
+//! - `--max-file-size`: Set maximum file size to process
+//! - `--max-concurrency`: Control concurrent file operations
+//! - `--rules-dir`: Directory for storing custom rules
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use rmcp::{ServiceExt, transport::stdio};
@@ -152,6 +186,10 @@ enum Commands {
     },
 }
 
+/// Main entry point for the ast-grep MCP service.
+///
+/// Handles both MCP server mode (default) and CLI testing commands.
+/// In MCP mode, logging is minimized to avoid interfering with the JSON protocol.
 #[tokio::main]
 #[tracing::instrument]
 async fn main() -> Result<()> {
@@ -200,7 +238,15 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Create a ServiceConfig from command line arguments
+/// Create a ServiceConfig from command line arguments.
+///
+/// Applies sensible defaults:
+/// - Root directories default to current working directory if none specified
+/// - Rules directory defaults to `~/.ast-grep-mcp/rules`
+///
+/// # Errors
+///
+/// Returns an error if the current working directory cannot be determined.
 fn create_config_from_args(args: GlobalArgs) -> Result<ServiceConfig> {
     let root_directories = if args.root_directories.is_empty() {
         // Default to current working directory
@@ -227,7 +273,19 @@ fn create_config_from_args(args: GlobalArgs) -> Result<ServiceConfig> {
     })
 }
 
-/// Run CLI commands for testing and debugging
+/// Run CLI commands for testing and debugging.
+///
+/// Provides a command-line interface for testing ast-grep functionality
+/// without needing to set up a full MCP client. Useful for development
+/// and debugging patterns.
+///
+/// # Supported Commands
+///
+/// - `search`: Search for patterns in code strings
+/// - `file-search`: Search for patterns across files using glob patterns
+/// - `rule-search`: Search using YAML rule configurations
+/// - `rule-replace`: Replace using YAML rule configurations
+/// - `generate-ast`: Generate AST for understanding node structure
 async fn run_cli_command(command: Commands, config: ServiceConfig) -> Result<()> {
     let service = AstGrepService::with_config(config);
 
@@ -241,11 +299,7 @@ async fn run_cli_command(command: Commands, config: ServiceConfig) -> Result<()>
             file,
         } => {
             let code_content = get_code_content(code, file).await?;
-            let param = SearchParam {
-                code: code_content,
-                pattern,
-                language,
-            };
+            let param = SearchParam::new(&code_content, &pattern, &language);
 
             let result = service.search(param).await?;
             println!("Found {} matches:", result.matches.len());
@@ -275,6 +329,12 @@ async fn run_cli_command(command: Commands, config: ServiceConfig) -> Result<()>
                 max_results,
                 max_file_size: 1024 * 1024, // 1MB default
                 cursor: None,
+                strictness: None,
+                selector: None,
+                context: None,
+                context_before: None,
+                context_after: None,
+                context_lines: None,
             };
 
             let result = service.file_search(param).await?;
@@ -405,7 +465,24 @@ async fn run_cli_command(command: Commands, config: ServiceConfig) -> Result<()>
     Ok(())
 }
 
-/// Get code content from either direct input, file, or stdin
+/// Get code content from either direct input, file, or stdin.
+///
+/// Supports three input methods:
+/// 1. Direct code string via `--code`
+/// 2. File path via `--file`
+/// 3. Stdin when `--code -` is specified
+///
+/// # Arguments
+///
+/// * `code` - Optional code string (use "-" for stdin)
+/// * `file` - Optional file path to read from
+///
+/// # Errors
+///
+/// - Returns error if both code and file are specified
+/// - Returns error if neither code nor file are specified
+/// - Returns error if file cannot be read
+/// - Returns error if stdin cannot be read
 async fn get_code_content(code: Option<String>, file: Option<PathBuf>) -> Result<String> {
     match (code, file) {
         (Some(code), None) => {

@@ -10,6 +10,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         code: "function greet() { console.log('Hello!'); }".to_string(),
         pattern: "console.log($VAR)".to_string(),
         language: "javascript".to_string(),
+        strictness: None,
+        selector: None,
+        context: None,
+        context_before: None,
+        context_after: None,
+        context_lines: None,
     };
 
     let result = service.search(param).await?;

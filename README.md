@@ -48,6 +48,13 @@ Add to your Claude Desktop configuration file:
 }
 ```
 
+### ⚠️ Important Usage Notes
+
+- **Manual Syntax Responsibility**: You are responsible for ensuring replacement patterns produce valid syntax
+- **Test Before Apply**: Always use `dry_run: true` first to preview changes
+- **Comma Placement**: Include commas explicitly in patterns - they are not automatically inserted
+- **Struct Update Syntax**: Fields must come before `..Default::default()` in Rust struct literals
+
 ### Other MCP Clients
 
 Configure your client to use `ast-grep-mcp` as a stdio-based MCP server.
@@ -63,7 +70,8 @@ Search for patterns within files using glob patterns or direct file paths.
 {
   "path_pattern": "src/**/*.js",
   "pattern": "function $NAME($PARAMS) { $BODY }",
-  "language": "javascript"
+  "language": "javascript",
+  "max_results": 20  // Optional, defaults to 20
 }
 ```
 
@@ -72,6 +80,31 @@ Search for patterns within files using glob patterns or direct file paths.
 - Direct file paths: `"/path/to/specific/file.js"`, `"src/main.rs"`
 
 **Security**: Direct file paths must be under configured root directories.
+
+**Pagination**: For large result sets, use the cursor for pagination:
+```json
+// First request
+{
+  "path_pattern": "**/*.js",
+  "pattern": "console.log($VAR)",
+  "language": "javascript"
+}
+
+// Response includes cursor for next page
+// "next_cursor": { "cursor": "H4sIAAAAAAAAA...", "is_complete": false }
+
+// Next request with cursor
+{
+  "path_pattern": "**/*.js",
+  "pattern": "console.log($VAR)",
+  "language": "javascript",
+  "cursor": {
+    "cursor": "H4sIAAAAAAAAA..."
+  }
+}
+```
+
+**Large Result Optimization**: When results exceed 10 files or 50 matches, the response automatically switches to a lightweight format with essential pagination data to avoid token limits.
 
 ### `replace`
 Replace patterns in code strings (for in-memory transformations).
@@ -84,9 +117,17 @@ Replace patterns in code strings (for in-memory transformations).
   "pattern": "const $VAR = $VAL",
   "replacement": "let $VAR = $VAL",
   "language": "javascript",
-  "dry_run": true
+  "dry_run": true,  // Optional, defaults to true for safety
+  "max_results": 20  // Optional, defaults to 20
 }
 ```
+
+⚠️ **Important**: ast-grep performs **literal pattern matching and replacement**. It does not:
+- Automatically insert commas between fields
+- Infer proper placement of struct update syntax (`..Default::default()`)
+- Handle syntax validation
+
+You must ensure your replacement patterns produce valid syntax.
 
 **Returns compact diffs:**
 ```json
@@ -106,6 +147,8 @@ Replace patterns in code strings (for in-memory transformations).
 }
 ```
 
+**Pagination**: Similar to `file_search`, supports cursor-based pagination for large refactoring operations. Uses the same opaque, compressed cursor format.
+
 ### `list_languages`
 Get all supported programming languages.
 
@@ -123,6 +166,27 @@ Returns AST structure and available node kinds like `function_declaration`, `ide
 Comprehensive usage examples and best practices.
 
 ## 📖 Pattern Examples
+
+### ⚠️ Important: Manual Comma Handling
+
+**ast-grep does NOT automatically insert commas.** You must include commas explicitly in your patterns:
+
+```rust
+// ❌ WRONG - Missing comma in replacement
+"Point { x: $X, y: $Y }" → "Point { x: $X, y: $Y z: 0 }"  // Invalid syntax
+
+// ✅ CORRECT - Comma included in replacement
+"Point { x: $X, y: $Y }" → "Point { x: $X, y: $Y, z: 0 }"  // Valid syntax
+```
+
+**Field ordering matters in struct updates:**
+```rust
+// ❌ WRONG - Fields after ..Default::default()
+Config { field: value, ..Default::default(), new_field: None }  // Invalid
+
+// ✅ CORRECT - Fields before ..Default::default()
+Config { field: value, new_field: None, ..Default::default() }  // Valid
+```
 
 ### AST Pattern Language
 ```javascript
@@ -201,6 +265,21 @@ rule:
   "dry_run": false
 }
 ```
+
+### 🎯 Best Practices for Reliable Patterns
+
+1. **Test patterns with simple examples first**
+2. **Use Context Lines** to understand insertion points:
+   ```json
+   {
+     "pattern": "enabled: $VAL",
+     "context_before": 2,
+     "context_after": 2
+   }
+   ```
+3. **Always include necessary commas** in replacement patterns
+4. **Match specific locations** rather than broad patterns when adding struct fields
+5. **Verify syntax** by ensuring `..Default::default()` remains last in struct literals
 
 ## 🏃 Usage
 

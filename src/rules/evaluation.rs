@@ -295,6 +295,8 @@ impl RuleEvaluator {
                     start_col: regex_match.start(),
                     end_col: regex_match.end(),
                     vars: HashMap::new(),
+                    context_before: None,
+                    context_after: None,
                 });
             }
         }
@@ -1055,6 +1057,8 @@ var y = 2;
             start_col: 0,
             end_col: 4,
             vars: std::collections::HashMap::new(),
+            context_before: None,
+            context_after: None,
         };
         let match2 = MatchResult {
             text: "test".to_string(),
@@ -1063,6 +1067,8 @@ var y = 2;
             start_col: 0,
             end_col: 4,
             vars: std::collections::HashMap::new(),
+            context_before: None,
+            context_after: None,
         };
         let match3 = MatchResult {
             text: "other".to_string(),
@@ -1071,6 +1077,8 @@ var y = 2;
             start_col: 0,
             end_col: 5,
             vars: std::collections::HashMap::new(),
+            context_before: None,
+            context_after: None,
         };
 
         let matches1 = vec![match1.clone(), match3.clone()];

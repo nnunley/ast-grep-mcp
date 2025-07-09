@@ -21,8 +21,15 @@ impl ToolService {
                         "properties": {
                             "code": { "type": "string" },
                             "pattern": { "type": "string" },
-                            "language": { "type": "string" }
-                        }
+                            "language": { "type": "string" },
+                            "strictness": { "type": "string", "enum": ["cst", "smart", "ast", "relaxed", "signature"], "description": "Match strictness level" },
+                            "selector": { "type": "string", "description": "CSS-like selector for matching specific node types" },
+                            "context": { "type": "string", "description": "Context pattern to match surrounding code" },
+                            "context_before": { "type": "integer", "minimum": 0, "description": "Number of lines to show before each match" },
+                            "context_after": { "type": "integer", "minimum": 0, "description": "Number of lines to show after each match" },
+                            "context_lines": { "type": "integer", "minimum": 0, "description": "Number of lines to show before and after each match (equivalent to grep -C)" }
+                        },
+                        "required": ["code", "pattern", "language"]
                     })).unwrap()),
                 },
                 Tool {
@@ -43,7 +50,13 @@ impl ToolService {
                                     "is_complete": { "type": "boolean" }
                                 },
                                 "required": ["last_file_path", "is_complete"]
-                            }
+                            },
+                            "strictness": { "type": "string", "enum": ["cst", "smart", "ast", "relaxed", "signature"], "description": "Match strictness level" },
+                            "selector": { "type": "string", "description": "CSS-like selector for matching specific node types" },
+                            "context": { "type": "string", "description": "Context pattern to match surrounding code" },
+                            "context_before": { "type": "integer", "minimum": 0, "description": "Number of lines to show before each match" },
+                            "context_after": { "type": "integer", "minimum": 0, "description": "Number of lines to show after each match" },
+                            "context_lines": { "type": "integer", "minimum": 0, "description": "Number of lines to show before and after each match (equivalent to grep -C)" }
                         },
                         "required": ["path_pattern", "pattern", "language"]
                     })).unwrap()),
