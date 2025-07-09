@@ -1,4 +1,5 @@
 use crate::errors::ServiceError;
+use crate::search_match::SearchMatches;
 use crate::types::MatchResult;
 use ast_grep_core::tree_sitter::StrDoc;
 use ast_grep_core::{AstGrep, Pattern};
@@ -66,6 +67,25 @@ impl PatternMatcher {
             .map(|node| MatchResult::from_node_match(&node))
             .collect();
 
+        Ok(matches)
+    }
+
+    /// Search and return native SearchMatch objects that retain AST information
+    pub fn search_native<'a>(
+        &self,
+        ast: &'a AstGrep<StrDoc<Language>>,
+        pattern: &str,
+        lang: Language,
+        selector: Option<&str>,
+        context: Option<&str>,
+    ) -> Result<SearchMatches<'a>, ServiceError> {
+        let pattern = if let (Some(selector), Some(context)) = (selector, context) {
+            self.get_or_create_contextual_pattern(pattern, selector, context, lang)?
+        } else {
+            self.get_or_create_pattern(pattern, lang)?
+        };
+
+        let matches = SearchMatches::from_node_matches(ast.root().find_all(pattern));
         Ok(matches)
     }
 

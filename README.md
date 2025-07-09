@@ -48,6 +48,31 @@ Add to your Claude Desktop configuration file:
 }
 ```
 
+### Project Configuration (sgconfig.yml)
+
+The service supports ast-grep's `sgconfig.yml` configuration files. When you start the service, it will:
+
+1. Search for `sgconfig.yml` in the current directory and parent directories
+2. Load rule directories specified in the configuration
+3. Make all rules from configured directories available for use
+
+Example `sgconfig.yml`:
+```yaml
+ruleDirs:
+  - ./rules
+  - ./team-rules
+  - ./node_modules/@company/ast-grep-rules
+```
+
+You can also specify a custom config path using the `--config` flag when starting the service.
+
+**Note on Duplicate Rule IDs**: The ast-grep documentation states that rule IDs should be unique. When multiple rules have the same ID across different directories, this service:
+- Uses only the first rule encountered
+- Emits a warning to stderr showing both the duplicate and original file paths
+- Ignores subsequent rules with the same ID
+
+While testing shows the ast-grep CLI currently applies all rules with duplicate IDs, this behavior is undocumented and our approach ensures predictable rule application.
+
 ### ⚠️ Important Usage Notes
 
 - **Manual Syntax Responsibility**: You are responsible for ensuring replacement patterns produce valid syntax
@@ -60,6 +85,23 @@ Add to your Claude Desktop configuration file:
 Configure your client to use `ast-grep-mcp` as a stdio-based MCP server.
 
 ## 🛠️ Available Tools
+
+### 🎯 Automatic Language Injection Support
+
+The service automatically detects and searches embedded languages, mimicking ast-grep CLI behavior:
+
+- **JavaScript in HTML**: Search for JS patterns in `<script>` tags automatically
+- **CSS in HTML**: Search for CSS patterns in `<style>` tags automatically
+- **No configuration needed**: Just specify the pattern language, not the file language
+
+Example:
+```json
+{
+  "pattern": "console.log($MSG)",
+  "language": "javascript",  // Pattern language
+  "file": "index.html"       // Automatically detects JS in HTML
+}
+```
 
 ### `search`
 Search for patterns in code strings (for quick checks).

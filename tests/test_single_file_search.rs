@@ -4,7 +4,6 @@ use ast_grep_mcp::rules::RuleEvaluator;
 use ast_grep_mcp::search::SearchService;
 use ast_grep_mcp::types::FileSearchParam;
 use std::fs;
-use std::path::PathBuf;
 use tempfile::TempDir;
 
 #[tokio::test]
@@ -36,11 +35,7 @@ fn another_test() {
     // Create service with temp directory as root
     let config = ServiceConfig {
         root_directories: vec![temp_path.to_path_buf()],
-        max_file_size: 1024 * 1024,
-        max_concurrency: 10,
-        limit: 100,
-        rules_directory: PathBuf::from(".ast-grep-rules"),
-        pattern_cache_size: 1000,
+        ..Default::default()
     };
 
     let pattern_matcher = PatternMatcher::new();
@@ -99,11 +94,7 @@ fn another_function() {
     // Create service with temp directory as root
     let config = ServiceConfig {
         root_directories: vec![temp_path.to_path_buf()],
-        max_file_size: 1024 * 1024,
-        max_concurrency: 10,
-        limit: 100,
-        rules_directory: PathBuf::from(".ast-grep-rules"),
-        pattern_cache_size: 1000,
+        ..Default::default()
     };
 
     let pattern_matcher = PatternMatcher::new();
@@ -153,11 +144,7 @@ async fn test_single_file_outside_root_directory() {
     // Create service with only the first temp directory as root
     let config = ServiceConfig {
         root_directories: vec![temp_path.to_path_buf()],
-        max_file_size: 1024 * 1024,
-        max_concurrency: 10,
-        limit: 100,
-        rules_directory: PathBuf::from(".ast-grep-rules"),
-        pattern_cache_size: 1000,
+        ..Default::default()
     };
 
     let pattern_matcher = PatternMatcher::new();
