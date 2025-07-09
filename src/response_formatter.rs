@@ -165,6 +165,55 @@ impl ResponseFormatter {
         summary
     }
 
+    /// Format an embedded search result with a readable summary
+    pub fn format_embedded_search_result(result: &EmbeddedSearchResult) -> String {
+        if result.matches.is_empty() {
+            return format!(
+                "🔍 **Embedded Search Results**\n\n❌ **No matches found**\n\n📊 **Summary:**\n- Host Language: {}\n- Embedded Language: {}\n- Total Embedded Blocks: {}\n\nThe pattern did not match anything in the embedded code blocks.",
+                result.host_language, result.embedded_language, result.total_embedded_blocks
+            );
+        }
+
+        let mut summary = format!(
+            "🔍 **Embedded Search Results**\n\n✅ **Found {} matches** in {} embedded blocks\n\n📊 **Summary:**\n- Host Language: {}\n- Embedded Language: {}\n- Total Embedded Blocks: {}\n\n",
+            result.matches.len(),
+            result.total_embedded_blocks,
+            result.host_language,
+            result.embedded_language,
+            result.total_embedded_blocks
+        );
+
+        // Group matches by block for better readability
+        let mut blocks_with_matches: std::collections::HashMap<usize, Vec<&EmbeddedMatchResult>> =
+            std::collections::HashMap::new();
+        for match_result in &result.matches {
+            blocks_with_matches
+                .entry(match_result.embedded_block_index)
+                .or_default()
+                .push(match_result);
+        }
+
+        summary.push_str("🎯 **Matches by Block:**\n");
+        for (block_index, block_matches) in blocks_with_matches.iter() {
+            summary.push_str(&format!(
+                "\n**Block {} ({} matches):**\n",
+                block_index + 1,
+                block_matches.len()
+            ));
+            for (i, match_result) in block_matches.iter().enumerate() {
+                summary.push_str(&format!(
+                    "  {}. Line {}:{} - {}\n",
+                    i + 1,
+                    match_result.start_line,
+                    match_result.start_col,
+                    match_result.text.trim()
+                ));
+            }
+        }
+
+        summary
+    }
+
     /// Format a replace result with a readable summary
     pub fn format_replace_result(result: &ReplaceResult) -> String {
         if result.changes.is_empty() {

@@ -867,6 +867,118 @@ pub struct ImportCatalogRuleResult {
     pub message: String,
 }
 
+/// Configuration for extracting embedded languages from host languages.
+///
+/// This defines how to extract code blocks from one language that contain
+/// code written in another language (e.g., JavaScript in HTML, SQL in Python).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbeddedLanguageConfig {
+    /// The host language (e.g., "html", "python")
+    pub host_language: String,
+    /// The embedded language (e.g., "javascript", "sql")
+    pub embedded_language: String,
+    /// Pattern to match the embedded code in the host language
+    pub extraction_pattern: String,
+    /// Optional selector to narrow down the extraction
+    pub selector: Option<String>,
+    /// Optional context pattern for more precise matching
+    pub context: Option<String>,
+}
+
+/// Parameters for searching in embedded languages.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct EmbeddedSearchParam {
+    /// Code containing embedded languages
+    pub code: String,
+    /// Pattern to search for in the embedded language
+    pub pattern: String,
+    /// Configuration for extracting embedded code
+    pub embedded_config: EmbeddedLanguageConfig,
+    /// Optional match strictness
+    pub strictness: Option<MatchStrictness>,
+}
+
+/// Result of searching in embedded languages.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct EmbeddedSearchResult {
+    /// Matches found in embedded code blocks
+    pub matches: Vec<EmbeddedMatchResult>,
+    /// Host language used for extraction
+    pub host_language: String,
+    /// Embedded language searched
+    pub embedded_language: String,
+    /// Total number of embedded code blocks found
+    pub total_embedded_blocks: usize,
+}
+
+/// A match result from embedded language search.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbeddedMatchResult {
+    /// The matched text
+    pub text: String,
+    /// Starting line number in host file
+    pub start_line: usize,
+    /// Ending line number in host file
+    pub end_line: usize,
+    /// Starting column number in host file
+    pub start_col: usize,
+    /// Ending column number in host file
+    pub end_col: usize,
+    /// Host context description
+    pub host_context: String,
+    /// Index of the embedded code block (0-based)
+    pub embedded_block_index: usize,
+    /// Captured metavariables from the pattern
+    pub vars: HashMap<String, String>,
+}
+
+/// Parameters for file-based embedded language search.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct EmbeddedFileSearchParam {
+    /// Path pattern (glob)
+    pub path_pattern: String,
+    /// Pattern to search for in embedded language
+    pub pattern: String,
+    /// Embedded language configuration
+    pub embedded_config: EmbeddedLanguageConfig,
+    /// Maximum number of results to return
+    #[serde(default = "default_max_results")]
+    pub max_results: usize,
+    /// Maximum file size to process
+    #[serde(default = "default_max_file_size")]
+    pub max_file_size: u64,
+    /// Pagination cursor
+    pub cursor: Option<CursorParam>,
+    /// Optional match strictness
+    pub strictness: Option<MatchStrictness>,
+}
+
+/// Result of file-based embedded language search.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct EmbeddedFileSearchResult {
+    /// Files containing matches
+    pub matches: Vec<EmbeddedFileMatchResult>,
+    /// Pagination cursor for next page
+    pub next_cursor: Option<CursorResult>,
+    /// Total number of files found
+    pub total_files_found: usize,
+}
+
+/// Match result for a file containing embedded languages.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbeddedFileMatchResult {
+    /// File path
+    pub file_path: String,
+    /// File size in bytes
+    pub file_size_bytes: u64,
+    /// Matches found in embedded code blocks
+    pub matches: Vec<EmbeddedMatchResult>,
+    /// Hash of the file content
+    pub file_hash: String,
+    /// Total embedded code blocks found in file
+    pub total_blocks: usize,
+}
+
 // Default functions for serde deserialization
 
 /// Default maximum results for search operations (20)

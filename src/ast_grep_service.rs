@@ -1,6 +1,7 @@
 use crate::ast_utils::AstParser;
 use crate::config::ServiceConfig;
 use crate::debug::DebugService;
+use crate::embedded::EmbeddedService;
 use crate::errors::ServiceError;
 use crate::pattern::PatternMatcher;
 use crate::replace::ReplaceService;
@@ -14,7 +15,7 @@ use ast_grep_core::{AstGrep, Pattern};
 
 use lru::LruCache;
 use std::num::NonZeroUsize;
-use std::{borrow::Cow, fs, path::PathBuf, str::FromStr, sync::Arc, sync::Mutex};
+use std::{borrow::Cow, str::FromStr, sync::Arc, sync::Mutex};
 
 use ast_grep_language::SupportLang as Language;
 // Removed unused base64 import
@@ -31,6 +32,7 @@ use sha2::{Digest, Sha256};
 
 #[derive(Clone)]
 pub struct AstGrepService {
+    #[allow(dead_code)]
     config: ServiceConfig,
     pattern_cache: Arc<Mutex<LruCache<String, Pattern>>>,
     #[allow(dead_code)]
@@ -45,6 +47,8 @@ pub struct AstGrepService {
     rule_service: RuleService,
     #[allow(dead_code)]
     debug_service: DebugService,
+    #[allow(dead_code)]
+    embedded_service: EmbeddedService,
 }
 
 impl Default for AstGrepService {
@@ -342,7 +346,7 @@ impl AstGrepService {
             pattern_matcher.clone(),
             rule_evaluator.clone(),
         );
-        let rule_storage = RuleStorage::new(config.rules_directory.clone());
+        let rule_storage = RuleStorage::with_directories(config.all_rule_directories());
         let catalog_manager = CatalogManager::new();
         let rule_service = RuleService::new(
             config.clone(),
@@ -351,6 +355,7 @@ impl AstGrepService {
             catalog_manager,
         );
         let debug_service = DebugService::new(pattern_matcher.clone());
+        let embedded_service = EmbeddedService::new(pattern_matcher.clone());
 
         Self {
             config,
@@ -361,6 +366,7 @@ impl AstGrepService {
             replace_service,
             rule_service,
             debug_service,
+            embedded_service,
         }
     }
 
@@ -626,6 +632,17 @@ impl AstGrepService {
         let result = self.search_service.file_search(param).await?;
         tracing::Span::current().record("total_files_found", result.total_files_found);
         tracing::Span::current().record("files_with_matches", result.matches.len());
+        Ok(result)
+    }
+
+    #[tracing::instrument(skip(self), fields(host_language = %param.embedded_config.host_language, embedded_language = %param.embedded_config.embedded_language, pattern = %param.pattern))]
+    pub async fn search_embedded(
+        &self,
+        param: EmbeddedSearchParam,
+    ) -> Result<EmbeddedSearchResult, ServiceError> {
+        let result = self.embedded_service.search_embedded(param).await?;
+        tracing::Span::current().record("total_matches", result.matches.len());
+        tracing::Span::current().record("total_blocks", result.total_embedded_blocks);
         Ok(result)
     }
 
@@ -1178,6 +1195,55 @@ Delete a stored rule configuration by ID.
 3. Apply the rule: `rule_search` or `rule_replace` using the stored rule ID
 4. Manage rules: `list_rules`, `get_rule`, `delete_rule` as needed
 
+## Project Configuration (sgconfig.yml)
+
+The service supports ast-grep's `sgconfig.yml` configuration files for project-wide rule management.
+
+**Automatic Discovery:**
+- Searches for `sgconfig.yml` in current directory and parent directories
+- Loads rule directories specified in the configuration
+- Makes all rules from configured directories available automatically
+
+**Configuration Format:**
+```yaml
+ruleDirs:
+  - ./rules              # Project-specific rules
+  - ./team-rules         # Shared team rules
+  - ./node_modules/@company/ast-grep-rules  # NPM package rules
+testConfigs:
+  - testDir: ./rule-tests
+    includeTestId:
+      - test-id-1
+utilDirs:
+  - ./utils              # Shared utilities
+```
+
+**Rule Directory Loading:**
+- All `.yaml` and `.yml` files in configured directories are loaded as rules
+- Subdirectories are searched recursively
+- Duplicate rule IDs emit warnings (first rule wins)
+- Rules from sgconfig.yml are merged with default `.ast-grep-rules/` directory
+
+**Duplicate Rule Handling:**
+- Each rule ID should be unique across all directories
+- When duplicates are found:
+  - Only the first rule encountered is used
+  - A warning is emitted to stderr showing both file paths
+  - This ensures predictable rule application
+
+**Example Project Setup:**
+```
+myproject/
+├── sgconfig.yml          # Project configuration
+├── rules/                # Project rules directory
+│   ├── security/        # Organized by category
+│   │   └── no-eval.yaml
+│   └── style/
+│       └── naming.yaml
+└── .ast-grep-rules/     # Default rules directory
+    └── custom-rule.yaml
+```
+
 ## Discovery and Debugging Tools
 
 ### generate_ast
@@ -1334,112 +1400,17 @@ Always check the response for error conditions before processing results.
         Ok(result)
     }
 
-    fn ensure_rules_directory(&self) -> Result<(), ServiceError> {
-        if !self.config.rules_directory.exists() {
-            fs::create_dir_all(&self.config.rules_directory)?;
-        }
-        Ok(())
-    }
-
-    fn get_rule_file_path(&self, rule_id: &str) -> PathBuf {
-        self.config.rules_directory.join(format!("{rule_id}.yaml"))
-    }
-
     #[tracing::instrument(skip(self), fields(rule_id))]
     pub async fn create_rule(
         &self,
         param: CreateRuleParam,
     ) -> Result<CreateRuleResult, ServiceError> {
-        // Parse and validate the rule configuration
-        let config = self.parse_rule_config(&param.rule_config)?;
-        self.validate_rule_config(&config)?;
-
-        tracing::Span::current().record("rule_id", &config.id);
-
-        // Ensure rules directory exists
-        self.ensure_rules_directory()?;
-
-        let file_path = self.get_rule_file_path(&config.id);
-        let exists = file_path.exists();
-
-        // Check if rule exists and overwrite is not allowed
-        if exists && !param.overwrite {
-            return Err(ServiceError::Internal(format!(
-                "Rule '{}' already exists. Use overwrite=true to replace it.",
-                config.id
-            )));
-        }
-
-        // Write rule to file as YAML
-        let yaml_content = serde_yaml::to_string(&config).map_err(|e| {
-            ServiceError::Internal(format!("Failed to serialize rule to YAML: {e}"))
-        })?;
-
-        fs::write(&file_path, yaml_content)?;
-
-        Ok(CreateRuleResult {
-            rule_id: config.id,
-            file_path: file_path.to_string_lossy().to_string(),
-            created: !exists,
-        })
+        self.rule_service.storage().create_rule(param).await
     }
 
     #[tracing::instrument(skip(self))]
     pub async fn list_rules(&self, param: ListRulesParam) -> Result<ListRulesResult, ServiceError> {
-        // Ensure rules directory exists
-        self.ensure_rules_directory()?;
-
-        let mut rules = Vec::new();
-
-        // Read all YAML files in rules directory
-        for entry in fs::read_dir(&self.config.rules_directory)? {
-            let entry = entry?;
-            let path = entry.path();
-
-            if path
-                .extension()
-                .is_some_and(|ext| ext == "yaml" || ext == "yml")
-            {
-                match self.load_rule_from_file(&path) {
-                    Ok(config) => {
-                        // Apply filters
-                        if let Some(lang_filter) = &param.language {
-                            if config.language != *lang_filter {
-                                continue;
-                            }
-                        }
-
-                        if let Some(severity_filter) = &param.severity {
-                            if config.severity.as_ref() != Some(severity_filter) {
-                                continue;
-                            }
-                        }
-
-                        rules.push(RuleInfo {
-                            id: config.id,
-                            language: config.language,
-                            message: config.message,
-                            severity: config.severity,
-                            file_path: path.to_string_lossy().to_string(),
-                            has_fix: config.fix.is_some(),
-                        });
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to load rule from {:?}: {}", path, e);
-                    }
-                }
-            }
-        }
-
-        // Sort rules by ID for consistent ordering
-        rules.sort_by(|a, b| a.id.cmp(&b.id));
-
-        Ok(ListRulesResult { rules })
-    }
-
-    fn load_rule_from_file(&self, path: &PathBuf) -> Result<RuleConfig, ServiceError> {
-        let content = fs::read_to_string(path)?;
-        self.parse_rule_config(&content)
+        self.rule_service.storage().list_rules(param).await
     }
 
     #[tracing::instrument(skip(self))]
@@ -1550,42 +1521,12 @@ fix: "// TODO: Replace with proper logging: console.log($VAR)"
         &self,
         param: DeleteRuleParam,
     ) -> Result<DeleteRuleResult, ServiceError> {
-        let file_path = self.get_rule_file_path(&param.rule_id);
-
-        if file_path.exists() {
-            fs::remove_file(&file_path)?;
-            Ok(DeleteRuleResult {
-                rule_id: param.rule_id.clone(),
-                deleted: true,
-                message: format!("Rule '{}' deleted successfully", param.rule_id),
-            })
-        } else {
-            Ok(DeleteRuleResult {
-                rule_id: param.rule_id.clone(),
-                deleted: false,
-                message: format!("Rule '{}' not found", param.rule_id),
-            })
-        }
+        self.rule_service.storage().delete_rule(param).await
     }
 
     #[tracing::instrument(skip(self), fields(rule_id = %param.rule_id))]
     pub async fn get_rule(&self, param: GetRuleParam) -> Result<GetRuleResult, ServiceError> {
-        let file_path = self.get_rule_file_path(&param.rule_id);
-
-        if !file_path.exists() {
-            return Err(ServiceError::Internal(format!(
-                "Rule '{}' not found",
-                param.rule_id
-            )));
-        }
-
-        let content = fs::read_to_string(&file_path)?;
-
-        let rule_config = self.parse_rule_config(&content)?;
-        Ok(GetRuleResult {
-            rule_config,
-            file_path: file_path.to_string_lossy().to_string(),
-        })
+        self.rule_service.storage().get_rule(param).await
     }
 }
 
@@ -1615,12 +1556,12 @@ impl ServerHandler for AstGrepService {
             tools: vec![
                 Tool {
                     name: Cow::Borrowed("search"),
-                    description: Cow::Borrowed("Search for patterns in code using ast-grep."),
+                    description: Cow::Borrowed("Search for AST patterns in provided code. Supports $VAR for single nodes, $$$ for multiple nodes. Returns matches with line/column positions."),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({ "type": "object", "properties": { "code": { "type": "string" }, "pattern": { "type": "string" }, "language": { "type": "string" } } })).unwrap()),
                 },
                 Tool {
                     name: Cow::Borrowed("suggest_patterns"),
-                    description: Cow::Borrowed("Suggest ast-grep patterns based on code examples."),
+                    description: Cow::Borrowed("Generate ast-grep patterns from code examples. Analyzes examples to suggest exact, specific, and general patterns with confidence scores."),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({
                         "type": "object",
                         "properties": {
@@ -1642,7 +1583,7 @@ impl ServerHandler for AstGrepService {
                 },
                 Tool {
                     name: Cow::Borrowed("file_search"),
-                    description: Cow::Borrowed("Search for patterns in a file using ast-grep."),
+                    description: Cow::Borrowed("Search files matching glob patterns for AST patterns. Supports pagination, context lines, and handles large codebases efficiently."),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({
                         "type": "object",
                         "properties": {
@@ -1664,8 +1605,32 @@ impl ServerHandler for AstGrepService {
                     })).unwrap()),
                 },
                 Tool {
+                    name: Cow::Borrowed("search_embedded"),
+                    description: Cow::Borrowed("Search for patterns in embedded languages within host languages (e.g., JavaScript in HTML, SQL in Python)."),
+                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "code": { "type": "string", "description": "Code containing embedded languages" },
+                            "pattern": { "type": "string", "description": "Pattern to search for in the embedded language" },
+                            "embedded_config": {
+                                "type": "object",
+                                "properties": {
+                                    "host_language": { "type": "string", "description": "The host language (e.g., html, python)" },
+                                    "embedded_language": { "type": "string", "description": "The embedded language (e.g., javascript, sql)" },
+                                    "extraction_pattern": { "type": "string", "description": "Pattern to match the embedded code in the host language" },
+                                    "selector": { "type": "string", "description": "Optional selector to narrow down the extraction" },
+                                    "context": { "type": "string", "description": "Optional context pattern for more precise matching" }
+                                },
+                                "required": ["host_language", "embedded_language", "extraction_pattern"]
+                            },
+                            "strictness": { "type": "string", "enum": ["cst", "smart", "ast", "relaxed", "signature"], "description": "Optional match strictness" }
+                        },
+                        "required": ["code", "pattern", "embedded_config"]
+                    })).unwrap()),
+                },
+                Tool {
                     name: Cow::Borrowed("replace"),
-                    description: Cow::Borrowed("Replace patterns in code."),
+                    description: Cow::Borrowed("Replace AST patterns in provided code. Use $VAR in both pattern and replacement to preserve captured nodes. Returns modified code."),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({ "type": "object", "properties": { "code": { "type": "string" }, "pattern": { "type": "string" }, "replacement": { "type": "string" }, "language": { "type": "string" } } })).unwrap()),
                 },
                 Tool {
@@ -1698,12 +1663,12 @@ impl ServerHandler for AstGrepService {
                 },
                 Tool {
                     name: Cow::Borrowed("list_languages"),
-                    description: Cow::Borrowed("List all supported programming languages."),
+                    description: Cow::Borrowed("Get all supported programming languages for ast-grep patterns. Returns 20+ languages including JS, TS, Python, Rust, Java, Go, etc."),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({ "type": "object", "properties": {} })).unwrap()),
                 },
                 Tool {
                     name: Cow::Borrowed("documentation"),
-                    description: Cow::Borrowed("Provides detailed usage examples for all tools."),
+                    description: Cow::Borrowed("Get comprehensive usage guide with examples, patterns, rules, and project configuration (sgconfig.yml) information."),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({ "type": "object", "properties": {} })).unwrap()),
                 },
                 Tool {
@@ -1834,7 +1799,7 @@ impl ServerHandler for AstGrepService {
                 },
                 Tool {
                     name: Cow::Borrowed("generate_ast"),
-                    description: Cow::Borrowed("Generate a stringified syntax tree for code using Tree-sitter. Useful for debugging patterns and understanding AST structure."),
+                    description: Cow::Borrowed("Generate syntax tree for code and discover Tree-sitter node kinds. Essential for writing Kind rules - shows node types like function_declaration, identifier, etc."),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({
                         "type": "object",
                         "properties": {
@@ -1896,6 +1861,16 @@ impl ServerHandler for AstGrepService {
                     ResponseFormatter::create_formatted_response(&result, summary)
                         .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
                 }
+            }
+            "search_embedded" => {
+                let param: EmbeddedSearchParam = serde_json::from_value(serde_json::Value::Object(
+                    request.arguments.unwrap_or_default(),
+                ))
+                .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
+                let result = self.search_embedded(param).await.map_err(ErrorData::from)?;
+                let summary = ResponseFormatter::format_embedded_search_result(&result);
+                ResponseFormatter::create_formatted_response(&result, summary)
+                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
             }
             "replace" => {
                 let param: ReplaceParam = serde_json::from_value(serde_json::Value::Object(
@@ -2081,6 +2056,7 @@ impl ServerHandler for AstGrepService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[tokio::test]
     async fn test_search_basic() {
@@ -2231,6 +2207,9 @@ mod tests {
             root_directories: vec![std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))],
             rules_directory: PathBuf::from(".test-rules"),
             pattern_cache_size: 500, // Smaller cache for testing
+            additional_rule_dirs: Vec::new(),
+            util_dirs: Vec::new(),
+            sg_config_path: None,
         };
 
         let service = AstGrepService::with_config(custom_config);

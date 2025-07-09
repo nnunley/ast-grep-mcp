@@ -39,9 +39,9 @@ use std::path::PathBuf;
 use tracing_subscriber::{self, filter::EnvFilter};
 
 use ast_grep_mcp::{
-    DebugAstParam, DebugFormat, DebugPatternParam, GenerateAstParam, RuleReplaceParam,
-    RuleSearchParam, SearchParam, ast_grep_service::AstGrepService, config::ServiceConfig,
-    types::*,
+    DebugAstParam, DebugFormat, DebugPatternParam, EmbeddedLanguageConfig, EmbeddedSearchParam,
+    GenerateAstParam, RuleReplaceParam, RuleSearchParam, SearchParam,
+    ast_grep_service::AstGrepService, config::ServiceConfig, types::*,
 };
 
 /// AST-Grep MCP Server - Structural code search and transformation
@@ -107,6 +107,14 @@ struct GlobalArgs {
         help = "Maximum number of compiled patterns to cache"
     )]
     pattern_cache_size: usize,
+
+    /// Path to sgconfig.yml file
+    #[arg(
+        long = "config",
+        help = "Path to sgconfig.yml file (defaults to auto-discovery)",
+        value_name = "PATH"
+    )]
+    sg_config_path: Option<PathBuf>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -142,6 +150,27 @@ enum Commands {
         /// Maximum results
         #[arg(long, default_value = "100")]
         max_results: usize,
+    },
+    /// Search for patterns in embedded languages within host languages
+    SearchEmbedded {
+        /// Pattern to search for in embedded language
+        #[arg(short, long)]
+        pattern: String,
+        /// Host language (e.g., html, python)
+        #[arg(long)]
+        host_language: String,
+        /// Embedded language (e.g., javascript, sql)
+        #[arg(long)]
+        embedded_language: String,
+        /// Pattern to extract embedded code from host language
+        #[arg(long)]
+        extraction_pattern: String,
+        /// Code to search in (use - for stdin)
+        #[arg(long)]
+        code: Option<String>,
+        /// File to search in
+        #[arg(short, long)]
+        file: Option<PathBuf>,
     },
     /// Search files using rules
     RuleSearch {
@@ -297,14 +326,20 @@ fn create_config_from_args(args: GlobalArgs) -> Result<ServiceConfig> {
             .join("rules")
     });
 
-    Ok(ServiceConfig {
+    let config = ServiceConfig {
         max_file_size: args.max_file_size,
         max_concurrency: args.max_concurrency,
         limit: args.limit,
         root_directories,
         rules_directory,
         pattern_cache_size: args.pattern_cache_size,
-    })
+        additional_rule_dirs: Vec::new(),
+        util_dirs: Vec::new(),
+        sg_config_path: None,
+    };
+
+    // Load sgconfig.yml if available
+    Ok(config.with_sg_config(args.sg_config_path.as_deref()))
 }
 
 /// Run CLI commands for testing and debugging.
@@ -347,6 +382,50 @@ async fn run_cli_command(command: Commands, config: ServiceConfig) -> Result<()>
                     match_result.end_col
                 );
                 println!("  Text: {}", match_result.text);
+            }
+        }
+
+        Commands::SearchEmbedded {
+            pattern,
+            host_language,
+            embedded_language,
+            extraction_pattern,
+            code,
+            file,
+        } => {
+            let code_content = get_code_content(code, file).await?;
+            let config = EmbeddedLanguageConfig {
+                host_language,
+                embedded_language,
+                extraction_pattern,
+                selector: None,
+                context: None,
+            };
+            let param = EmbeddedSearchParam {
+                code: code_content,
+                pattern,
+                embedded_config: config,
+                strictness: None,
+            };
+
+            let result = service.search_embedded(param).await?;
+            println!(
+                "Found {} matches in {} embedded blocks:",
+                result.matches.len(),
+                result.total_embedded_blocks
+            );
+            for (i, match_result) in result.matches.iter().enumerate() {
+                println!(
+                    "Match {}: {}:{}-{}:{} (Block {})",
+                    i + 1,
+                    match_result.start_line,
+                    match_result.start_col,
+                    match_result.end_line,
+                    match_result.end_col,
+                    match_result.embedded_block_index + 1
+                );
+                println!("  Text: {}", match_result.text);
+                println!("  Context: {}", match_result.host_context);
             }
         }
 
@@ -657,6 +736,7 @@ mod tests {
             limit: 100,
             rules_directory: None,
             pattern_cache_size: 500,
+            sg_config_path: None,
         };
 
         let config = create_config_from_args(args).unwrap();
@@ -686,6 +766,7 @@ mod tests {
             limit: 200,
             rules_directory: Some(custom_rules.clone()),
             pattern_cache_size: 1000,
+            sg_config_path: None,
         };
 
         let config = create_config_from_args(args).unwrap();
@@ -747,6 +828,34 @@ mod tests {
     async fn test_get_code_content_nonexistent_file() {
         let result = get_code_content(None, Some(PathBuf::from("/nonexistent/file.txt"))).await;
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_create_config_with_sgconfig_path() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("custom-sg.yml");
+
+        // Create a simple sgconfig.yml
+        let sg_config_content = r#"
+ruleDirs:
+  - ./custom-rules
+"#;
+        fs::write(&config_path, sg_config_content).unwrap();
+        fs::create_dir_all(temp_dir.path().join("custom-rules")).unwrap();
+
+        let args = GlobalArgs {
+            root_directories: vec![temp_dir.path().to_path_buf()],
+            max_file_size: 1024,
+            max_concurrency: 5,
+            limit: 100,
+            rules_directory: None,
+            pattern_cache_size: 500,
+            sg_config_path: Some(config_path),
+        };
+
+        let config = create_config_from_args(args).unwrap();
+        assert!(config.sg_config_path.is_some());
+        assert_eq!(config.additional_rule_dirs.len(), 1);
     }
 
     #[test]

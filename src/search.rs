@@ -1,6 +1,8 @@
 use crate::config::ServiceConfig;
 use crate::context_lines::add_context_to_search_result;
+use crate::embedded::EmbeddedService;
 use crate::errors::ServiceError;
+use crate::language_injection::LanguageInjection;
 use crate::path_validation::validate_path_pattern;
 use crate::pattern::PatternMatcher;
 use crate::rules::{RuleEvaluator, RuleSearchParam, ast::Rule, parse_rule_config};
@@ -17,6 +19,7 @@ pub struct SearchService {
     config: ServiceConfig,
     pattern_matcher: PatternMatcher,
     rule_evaluator: RuleEvaluator,
+    embedded_service: EmbeddedService,
 }
 
 impl SearchService {
@@ -25,10 +28,12 @@ impl SearchService {
         pattern_matcher: PatternMatcher,
         rule_evaluator: RuleEvaluator,
     ) -> Self {
+        let embedded_service = EmbeddedService::new(pattern_matcher.clone());
         Self {
             config,
             pattern_matcher,
             rule_evaluator,
+            embedded_service,
         }
     }
 
@@ -54,38 +59,74 @@ impl SearchService {
 
         // Read file and search for matches
         std::fs::read_to_string(file_path).ok().and_then(|content| {
-            self.pattern_matcher
-                .search_with_options(&content, pattern, lang, selector, context)
-                .ok()
-                .and_then(|matches| {
-                    if matches.is_empty() {
-                        None
-                    } else {
-                        let mut final_matches = matches;
+            // Check if we should use language injection
+            let matches = if let Some(injection_config) =
+                LanguageInjection::should_use_injection(Some(file_path), &lang.to_string())
+            {
+                // Use embedded language search
+                let param = EmbeddedSearchParam {
+                    code: content.clone(),
+                    pattern: pattern.to_string(),
+                    embedded_config: injection_config.embedded_config,
+                    strictness: None,
+                };
 
-                        // Add context lines if requested
-                        if context_before.is_some()
-                            || context_after.is_some()
-                            || context_lines.is_some()
-                        {
-                            final_matches = crate::context_lines::extract_context_lines(
-                                &content,
-                                &final_matches,
-                                context_before,
-                                context_after,
-                                context_lines,
-                            );
-                        }
-
-                        let file_hash = format!("{:x}", Sha256::digest(content.as_bytes()));
-                        Some(FileMatchResult {
-                            file_path: file_path.to_string(),
-                            file_size_bytes: file_size,
-                            matches: final_matches,
-                            file_hash,
-                        })
-                    }
+                // Use blocking task to run async embedded search
+                let embedded_service = self.embedded_service.clone();
+                let matches = std::thread::spawn(move || {
+                    let rt = tokio::runtime::Runtime::new().unwrap();
+                    rt.block_on(embedded_service.search_embedded_native(param))
                 })
+                .join()
+                .unwrap()
+                .ok()?;
+
+                // Convert embedded matches to regular matches
+                matches
+                    .matches
+                    .into_iter()
+                    .map(|em| MatchResult {
+                        text: em.text,
+                        start_line: em.start_line,
+                        start_col: em.start_col,
+                        end_line: em.end_line,
+                        end_col: em.end_col,
+                        vars: em.vars,
+                        context_before: None,
+                        context_after: None,
+                    })
+                    .collect()
+            } else {
+                // Use regular search
+                self.pattern_matcher
+                    .search_with_options(&content, pattern, lang, selector, context)
+                    .ok()?
+            };
+
+            if matches.is_empty() {
+                None
+            } else {
+                let mut final_matches = matches;
+
+                // Add context lines if requested
+                if context_before.is_some() || context_after.is_some() || context_lines.is_some() {
+                    final_matches = crate::context_lines::extract_context_lines(
+                        &content,
+                        &final_matches,
+                        context_before,
+                        context_after,
+                        context_lines,
+                    );
+                }
+
+                let file_hash = format!("{:x}", Sha256::digest(content.as_bytes()));
+                Some(FileMatchResult {
+                    file_path: file_path.to_string(),
+                    file_size_bytes: file_size,
+                    matches: final_matches,
+                    file_hash,
+                })
+            }
         })
     }
 
@@ -113,13 +154,58 @@ impl SearchService {
         let lang = Language::from_str(&param.language)
             .map_err(|_| ServiceError::Internal("Failed to parse language".to_string()))?;
 
-        let matches = self.pattern_matcher.search_with_options(
-            &param.code,
-            &param.pattern,
-            lang,
-            param.selector.as_deref(),
-            param.context.as_deref(),
-        )?;
+        // For string search, we can't auto-detect file type, so check if code looks like HTML
+        let matches = if param.code.contains("<script") || param.code.contains("<style") {
+            // Might be HTML with embedded code
+            if let Some(injection_config) =
+                LanguageInjection::should_use_injection(None, &param.language)
+            {
+                // Use embedded search
+                let embedded_param = EmbeddedSearchParam {
+                    code: param.code.clone(),
+                    pattern: param.pattern.clone(),
+                    embedded_config: injection_config.embedded_config,
+                    strictness: param.strictness,
+                };
+
+                let result = self
+                    .embedded_service
+                    .search_embedded_native(embedded_param)
+                    .await?;
+
+                // Convert embedded matches to regular matches
+                result
+                    .matches
+                    .into_iter()
+                    .map(|em| MatchResult {
+                        text: em.text,
+                        start_line: em.start_line,
+                        start_col: em.start_col,
+                        end_line: em.end_line,
+                        end_col: em.end_col,
+                        vars: em.vars,
+                        context_before: None,
+                        context_after: None,
+                    })
+                    .collect()
+            } else {
+                self.pattern_matcher.search_with_options(
+                    &param.code,
+                    &param.pattern,
+                    lang,
+                    param.selector.as_deref(),
+                    param.context.as_deref(),
+                )?
+            }
+        } else {
+            self.pattern_matcher.search_with_options(
+                &param.code,
+                &param.pattern,
+                lang,
+                param.selector.as_deref(),
+                param.context.as_deref(),
+            )?
+        };
 
         let mut result = SearchResult {
             matches,

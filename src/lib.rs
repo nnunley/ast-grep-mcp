@@ -55,13 +55,17 @@ pub mod ast_utils;
 pub mod config;
 pub mod context_lines;
 pub mod debug;
+pub mod embedded;
 pub mod errors;
+pub mod language_injection;
 pub mod path_validation;
 pub mod pattern;
 pub mod replace;
 pub mod response_formatter;
 pub mod rules;
 pub mod search;
+pub mod search_match;
+pub mod sg_config;
 pub mod tools;
 pub mod types;
 
