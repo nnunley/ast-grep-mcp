@@ -58,7 +58,7 @@ Configure your client to use `ast-grep-mcp` as a stdio-based MCP server.
 Search for patterns in code strings (for quick checks).
 
 ### `file_search`
-Search for patterns within files using glob patterns.
+Search for patterns within files using glob patterns or direct file paths.
 ```json
 {
   "path_pattern": "src/**/*.js",
@@ -66,6 +66,12 @@ Search for patterns within files using glob patterns.
   "language": "javascript"
 }
 ```
+
+**Supports both glob patterns and direct file paths:**
+- Glob patterns: `"src/**/*.js"`, `"*.rs"`, `"**/*.py"`
+- Direct file paths: `"/path/to/specific/file.js"`, `"src/main.rs"`
+
+**Security**: Direct file paths must be under configured root directories.
 
 ### `replace`
 Replace patterns in code strings (for in-memory transformations).
