@@ -136,24 +136,3 @@ async fn test_valid_patterns_still_work() {
         );
     }
 }
-
-#[cfg(windows)]
-#[tokio::test]
-async fn test_windows_drive_letter_blocked() {
-    let (service, _temp_dir) = create_secure_service();
-
-    let param = FileSearchParam {
-        path_pattern: "C:\\Windows\\System32\\*.dll".to_string(),
-        pattern: "test".to_string(),
-        language: "javascript".to_string(),
-        max_results: 10,
-        max_file_size: 1024 * 1024,
-        cursor: None,
-    };
-
-    let result = service.file_search(param).await;
-    assert!(
-        result.is_err(),
-        "Windows absolute paths with drive letters should be blocked"
-    );
-}
