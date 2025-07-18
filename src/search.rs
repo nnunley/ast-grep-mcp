@@ -7,8 +7,8 @@ use crate::path_validation::validate_path_pattern;
 use crate::pattern::PatternMatcher;
 use crate::rules::{RuleEvaluator, RuleSearchParam, ast::Rule, parse_rule_config};
 use crate::types::*;
+
 use ast_grep_language::SupportLang as Language;
-// Removed unused imports
 use globset::{Glob, GlobSetBuilder};
 use sha2::{Digest, Sha256};
 use std::str::FromStr;

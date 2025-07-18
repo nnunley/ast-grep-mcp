@@ -480,6 +480,83 @@ We welcome contributions to any roadmap items:
 2. **Good First Issues**: Documentation improvements, test coverage
 3. **Advanced Features**: Semantic analysis, ML-based pattern suggestion
 
+## 📋 Technical Architecture & Implementation Notes
+
+### Duplicate Rule ID Handling
+
+The ast-grep documentation states that rule IDs should be unique, but the CLI behavior with duplicates is undocumented. Our implementation follows a "first wins" strategy:
+
+- Only the first rule with a given ID is kept
+- Subsequent rules with the same ID are ignored and a warning is emitted
+- This ensures predictable rule application, unlike the undocumented CLI behavior
+
+### Known Issues & Future Improvements
+
+#### Language Injection Enhancement (TODO)
+The current automatic language injection (JavaScript in HTML, CSS in HTML) has limitations:
+
+**Current Status:**
+- ✅ Basic HTML/JS/CSS injection working
+- ✅ Detection based on file extension + pattern language
+- ✅ Integration with search methods
+
+**Remaining Work:**
+- Fix extraction patterns for script tags with attributes
+- Improve CSS extraction for styled-components and Vue scoped styles
+- Add more language combinations (Python/SQL, JS/GraphQL, Markdown code blocks)
+- Handle edge cases and malformed HTML
+- Performance optimization with caching
+- Configuration support via sgconfig.yml
+- Better error handling and fallback mechanisms
+
+#### Performance Optimization Opportunities
+- Cache extraction results for repeated searches
+- Improve rule evaluation performance for large files
+- Optimize AST parsing for frequently-used patterns
+- Implement parallel processing for bulk operations
+
+#### Error Handling Improvements
+- More comprehensive error recovery mechanisms
+- Better error messages for pattern matching failures
+- Graceful degradation when Tree-sitter parsing fails
+- Validation of user-provided patterns before execution
+
+## 📝 Changelog
+
+### [Unreleased]
+
+**Added:**
+- Initial release of ast-grep MCP service
+- Support for structural code search and replacement
+- Five main tools: `search`, `file_search`, `replace`, `file_replace`, `list_languages`
+- Parallelized file operations for improved performance
+- Cursor-based pagination for handling large result sets
+- Configurable file size limits and concurrency settings
+- Support for 20+ programming languages
+- Comprehensive documentation and examples
+- Full test suite with unit and integration tests
+- Rule management system with YAML configuration
+- Automatic language injection for embedded code
+- Debug tools for pattern testing and AST exploration
+
+**Technical Details:**
+- Built on rmcp (Rust MCP SDK)
+- Uses ast-grep-core for pattern matching
+- Supports MCP (Model Context Protocol)
+- Production-ready error handling
+- Base64-encoded pagination cursors
+- Configurable concurrency (default: 10 concurrent operations)
+- File size limits (default: 50MB per file)
+- Result limits (default: 1000 results per request)
+
+### [0.1.0] - 2024-07-02
+
+**Added:**
+- Initial project setup
+- Basic MCP service structure
+- MIT License
+- README with setup instructions
+
 ## 🤝 Contributing
 
 1. Fork the repository

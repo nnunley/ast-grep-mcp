@@ -66,6 +66,7 @@ pub mod rules;
 pub mod search;
 pub mod search_match;
 pub mod sg_config;
+pub mod tool_router;
 pub mod tools;
 pub mod types;
 

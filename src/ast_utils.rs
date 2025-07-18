@@ -1,3 +1,8 @@
+//! # AST Utilities Module
+//!
+//! Provides utilities for working with AST parsing and pattern creation,
+//! including caching for improved performance.
+
 use ast_grep_core::{AstGrep, Pattern, tree_sitter::StrDoc};
 use ast_grep_language::SupportLang as Language;
 use std::collections::HashMap;

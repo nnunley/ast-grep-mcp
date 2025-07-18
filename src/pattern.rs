@@ -1,3 +1,8 @@
+//! # Pattern Matching Module
+//!
+//! Provides pattern compilation and matching functionality with caching support
+//! for efficient repeated pattern searches.
+
 use crate::errors::ServiceError;
 use crate::search_match::SearchMatches;
 use crate::types::MatchResult;

@@ -9,6 +9,7 @@ use crate::response_formatter::ResponseFormatter;
 use crate::rules::*;
 use crate::rules::{CatalogManager, RuleEvaluator, RuleService, RuleStorage};
 use crate::search::SearchService;
+use crate::tool_router::ToolRouter;
 use crate::types::*;
 
 use ast_grep_core::{AstGrep, Pattern};
@@ -22,7 +23,7 @@ use ast_grep_language::SupportLang as Language;
 use rmcp::{
     ServerHandler,
     model::{
-        CallToolRequestParam, CallToolResult, Content, ErrorData, Implementation, InitializeResult,
+        CallToolRequestParam, CallToolResult, ErrorData, Implementation, InitializeResult,
         ListToolsResult, PaginatedRequestParam, ProtocolVersion, ServerCapabilities, Tool,
     },
     service::{RequestContext, RoleServer},
@@ -31,24 +32,17 @@ use rmcp::{
 use sha2::{Digest, Sha256};
 
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct AstGrepService {
-    #[allow(dead_code)]
-    config: ServiceConfig,
-    pattern_cache: Arc<Mutex<LruCache<String, Pattern>>>,
-    #[allow(dead_code)]
-    pattern_matcher: PatternMatcher,
-    #[allow(dead_code)]
-    rule_evaluator: RuleEvaluator,
-    #[allow(dead_code)]
-    search_service: SearchService,
-    #[allow(dead_code)]
-    replace_service: ReplaceService,
-    #[allow(dead_code)]
-    rule_service: RuleService,
-    #[allow(dead_code)]
-    debug_service: DebugService,
-    #[allow(dead_code)]
-    embedded_service: EmbeddedService,
+    pub(crate) config: ServiceConfig,
+    pub(crate) pattern_cache: Arc<Mutex<LruCache<String, Pattern>>>,
+    pub(crate) pattern_matcher: PatternMatcher,
+    pub(crate) rule_evaluator: RuleEvaluator,
+    pub(crate) search_service: SearchService,
+    pub(crate) replace_service: ReplaceService,
+    pub(crate) rule_service: RuleService,
+    pub(crate) debug_service: DebugService,
+    pub(crate) embedded_service: EmbeddedService,
 }
 
 impl Default for AstGrepService {
@@ -708,19 +702,47 @@ impl AstGrepService {
         &self,
         _param: DocumentationParam,
     ) -> Result<DocumentationResult, ServiceError> {
-        let docs = r##"
-# AST-Grep MCP Service Documentation
+        let docs = self.generate_documentation_content();
+        Ok(DocumentationResult {
+            content: docs.to_string(),
+        })
+    }
 
-This service provides structural code search and transformation using ast-grep patterns and rule configurations.
+    /// Generate the complete documentation content for the MCP service
+    fn generate_documentation_content(&self) -> String {
+        format!(
+            "{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}",
+            self.get_header_section(),
+            self.get_key_concepts_section(),
+            self.get_search_section(),
+            self.get_file_search_section(),
+            self.get_replace_section(),
+            self.get_file_replace_section(),
+            self.get_output_format_section(),
+            self.get_pagination_section(),
+            self.get_list_languages_section(),
+            self.get_best_practices_section(),
+            self.get_rule_operations_section(),
+            self.get_rule_management_section(),
+            self.get_project_configuration_section(),
+            self.get_discovery_and_debugging_section(),
+            self.get_error_handling_section(),
+        )
+    }
 
-## Key Concepts
+    /// Get the header section of the documentation
+    fn get_header_section(&self) -> &'static str {
+        "# AST-Grep MCP Service Documentation\n\nThis service provides structural code search and transformation using ast-grep patterns and rule configurations.\n\n"
+    }
 
-**AST Patterns:** Use `$VAR` to capture single nodes, `$$$` to capture multiple statements
-**Rule Configurations:** YAML or JSON configurations for complex pattern matching and transformations
-**Languages:** Supports javascript, typescript, rust, python, java, go, and many more
-**Glob Patterns:** Use `**/*.js` for recursive search, `src/*.ts` for single directory
+    /// Get the key concepts section of the documentation
+    fn get_key_concepts_section(&self) -> &'static str {
+        "## Key Concepts\n\n**AST Patterns:** Use `$VAR` to capture single nodes, `$$$` to capture multiple statements\n**Rule Configurations:** YAML or JSON configurations for complex pattern matching and transformations\n**Languages:** Supports javascript, typescript, rust, python, java, go, and many more\n**Glob Patterns:** Use `**/*.js` for recursive search, `src/*.ts` for single directory\n\n"
+    }
 
-## search
+    /// Get the search section of the documentation
+    fn get_search_section(&self) -> &'static str {
+        r#"## search
 
 Searches for patterns in code provided as a string. Useful for quick checks or when code snippets are generated dynamically.
 
@@ -762,7 +784,12 @@ Searches for patterns in code provided as a string. Useful for quick checks or w
 }
 ```
 
-## file_search
+"#
+    }
+
+    /// Get the file search section of the documentation
+    fn get_file_search_section(&self) -> &'static str {
+        r#"## file_search
 
 Searches for patterns within files matching a glob pattern. Ideal for analyzing existing code files on the system.
 
@@ -817,7 +844,12 @@ Searches for patterns within files matching a glob pattern. Ideal for analyzing 
 }
 ```
 
-## replace
+"#
+    }
+
+    /// Get the replace section of the documentation
+    fn get_replace_section(&self) -> &'static str {
+        r#"## replace
 
 Replaces patterns in code provided as a string. Useful for in-memory code transformations.
 
@@ -871,7 +903,12 @@ Replaces patterns in code provided as a string. Useful for in-memory code transf
 }
 ```
 
-## file_replace
+"#
+    }
+
+    /// Get the file replace section of the documentation
+    fn get_file_replace_section(&self) -> &'static str {
+        r#"## file_replace
 
 Replaces patterns within files matching a glob pattern. Supports bulk refactoring with optimized response formats.
 
@@ -977,7 +1014,12 @@ Returns: `{"files_with_changes": [["src/main.rs", 15], ["src/lib.rs", 8]], "tota
 }
 ```
 
-**Output Format for all tools:**
+"#
+    }
+
+    /// Get the output format section of the documentation
+    fn get_output_format_section(&self) -> &'static str {
+        r#"**Output Format for all tools:**
 
 `search` and `file_search` return a list of matches. Each match includes:
 - `text`: The full text of the matched code snippet.
@@ -998,7 +1040,12 @@ Returns: `{"files_with_changes": [["src/main.rs", 15], ["src/lib.rs", 8]], "tota
 }
 ```
 
-## Pagination
+"#
+    }
+
+    /// Get the pagination section of the documentation
+    fn get_pagination_section(&self) -> &'static str {
+        r#"## Pagination
 
 `file_search` and `file_replace` support pagination for large result sets. When results are paginated:
 
@@ -1024,7 +1071,12 @@ Returns: `{"files_with_changes": [["src/main.rs", 15], ["src/lib.rs", 8]], "tota
 }
 ```
 
-## list_languages
+"#
+    }
+
+    /// Get the list languages section of the documentation
+    fn get_list_languages_section(&self) -> &'static str {
+        r#"## list_languages
 
 Returns all supported programming languages.
 
@@ -1043,7 +1095,12 @@ Returns all supported programming languages.
 - **Scripting:** python, ruby, lua, bash
 - **Others:** swift, dart, elixir, haskell, php, yaml, json
 
-## Best Practices
+"#
+    }
+
+    /// Get the best practices section of the documentation
+    fn get_best_practices_section(&self) -> &'static str {
+        r#"## Best Practices
 
 **Pattern Writing Tips:**
 - Use specific patterns: `console.log($VAR)` vs `$ANY`
@@ -1061,7 +1118,12 @@ Returns all supported programming languages.
 - Class methods: `$VISIBILITY $METHOD($PARAMS) { $BODY }`
 - Import statements: `import $NAME from '$PATH'`
 
-## Rule-Based Operations
+"#
+    }
+
+    /// Get the rule operations section of the documentation
+    fn get_rule_operations_section(&self) -> &'static str {
+        r#"## Rule-Based Operations
 
 ### validate_rule
 
@@ -1135,7 +1197,12 @@ rule:
 fix: "const $NAME = $VALUE"
 ```
 
-## Rule Management for LLMs
+"#
+    }
+
+    /// Get the rule management section of the documentation
+    fn get_rule_management_section(&self) -> &'static str {
+        r#"## Rule Management for LLMs
 
 The service provides comprehensive rule management capabilities allowing LLMs to create, store, and reuse custom rule configurations.
 
@@ -1195,7 +1262,12 @@ Delete a stored rule configuration by ID.
 3. Apply the rule: `rule_search` or `rule_replace` using the stored rule ID
 4. Manage rules: `list_rules`, `get_rule`, `delete_rule` as needed
 
-## Project Configuration (sgconfig.yml)
+"#
+    }
+
+    /// Get the project configuration section of the documentation
+    fn get_project_configuration_section(&self) -> &'static str {
+        r#"## Project Configuration (sgconfig.yml)
 
 The service supports ast-grep's `sgconfig.yml` configuration files for project-wide rule management.
 
@@ -1244,7 +1316,12 @@ myproject/
     └── custom-rule.yaml
 ```
 
-## Discovery and Debugging Tools
+"#
+    }
+
+    /// Get the discovery and debugging section of the documentation
+    fn get_discovery_and_debugging_section(&self) -> &'static str {
+        r#"## Discovery and Debugging Tools
 
 ### generate_ast
 
@@ -1292,7 +1369,12 @@ Lists all supported programming languages for ast-grep patterns.
 
 **Returns:** Array of supported language identifiers (javascript, typescript, rust, python, etc.)
 
-## Error Handling
+"#
+    }
+
+    /// Get the error handling section of the documentation
+    fn get_error_handling_section(&self) -> &'static str {
+        r#"## Error Handling
 
 The service returns structured errors for:
 - Invalid glob patterns
@@ -1303,10 +1385,7 @@ The service returns structured errors for:
 - Missing fix field for replacements
 
 Always check the response for error conditions before processing results.
-        "##;
-        Ok(DocumentationResult {
-            content: docs.to_string(),
-        })
+"#
     }
 
     #[tracing::instrument(skip(self))]
@@ -1820,236 +1899,73 @@ impl ServerHandler for AstGrepService {
         request: CallToolRequestParam,
         _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
-        match request.name.as_ref() {
-            "search" => {
-                let param: SearchParam = serde_json::from_value(serde_json::Value::Object(
-                    request.arguments.unwrap_or_default(),
-                ))
-                .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
-                let result = self.search(param).await.map_err(ErrorData::from)?;
-                let summary = ResponseFormatter::format_search_result(&result);
-                ResponseFormatter::create_formatted_response(&result, summary)
-                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
-            }
-            "suggest_patterns" => {
-                let param: SuggestPatternsParam = serde_json::from_value(
-                    serde_json::Value::Object(request.arguments.unwrap_or_default()),
-                )
-                .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
-                let result = self
-                    .suggest_patterns(param)
-                    .await
-                    .map_err(ErrorData::from)?;
-                let summary = ResponseFormatter::format_suggest_patterns_result(&result);
-                ResponseFormatter::create_formatted_response(&result, summary)
-                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
-            }
-            "file_search" => {
-                let param: FileSearchParam = serde_json::from_value(serde_json::Value::Object(
-                    request.arguments.unwrap_or_default(),
-                ))
-                .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
-                let result = self.file_search(param).await.map_err(ErrorData::from)?;
-                let summary = ResponseFormatter::format_file_search_result(&result);
-
-                // Use lightweight response for large results to avoid token limits
-                let total_matches: usize = result.matches.iter().map(|f| f.matches.len()).sum();
-                if result.matches.len() > 10 || total_matches > 50 {
-                    ResponseFormatter::create_lightweight_response_for_file_search(&result, summary)
-                        .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
-                } else {
-                    ResponseFormatter::create_formatted_response(&result, summary)
-                        .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
-                }
-            }
-            "search_embedded" => {
-                let param: EmbeddedSearchParam = serde_json::from_value(serde_json::Value::Object(
-                    request.arguments.unwrap_or_default(),
-                ))
-                .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
-                let result = self.search_embedded(param).await.map_err(ErrorData::from)?;
-                let summary = ResponseFormatter::format_embedded_search_result(&result);
-                ResponseFormatter::create_formatted_response(&result, summary)
-                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
-            }
-            "replace" => {
-                let param: ReplaceParam = serde_json::from_value(serde_json::Value::Object(
-                    request.arguments.unwrap_or_default(),
-                ))
-                .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
-                let result = self.replace(param).await.map_err(ErrorData::from)?;
-                let summary = ResponseFormatter::format_replace_result(&result);
-                ResponseFormatter::create_formatted_response(&result, summary)
-                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
-            }
-            "file_replace" => {
-                let param: FileReplaceParam = serde_json::from_value(serde_json::Value::Object(
-                    request.arguments.unwrap_or_default(),
-                ))
-                .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
-                let result = self.file_replace(param).await.map_err(ErrorData::from)?;
-                let summary = ResponseFormatter::format_file_replace_result(&result);
-                ResponseFormatter::create_formatted_response(&result, summary)
-                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
-            }
-            "list_languages" => {
-                let param: ListLanguagesParam = serde_json::from_value(serde_json::Value::Object(
-                    request.arguments.unwrap_or_default(),
-                ))
-                .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
-                let result = self.list_languages(param).await.map_err(ErrorData::from)?;
-                let summary = ResponseFormatter::format_list_languages_result(&result);
-                ResponseFormatter::create_formatted_response(&result, summary)
-                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
-            }
-            "documentation" => {
-                let param: DocumentationParam = serde_json::from_value(serde_json::Value::Object(
-                    request.arguments.unwrap_or_default(),
-                ))
-                .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
-                let result = self.documentation(param).await.map_err(ErrorData::from)?;
-                let summary = ResponseFormatter::format_documentation_result(&result);
-                ResponseFormatter::create_formatted_response(&result, summary)
-                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
-            }
-            "validate_rule" => {
-                let param: RuleValidateParam = serde_json::from_value(serde_json::Value::Object(
-                    request.arguments.unwrap_or_default(),
-                ))
-                .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
-                let result = self.validate_rule(param).await.map_err(ErrorData::from)?;
-                let summary = ResponseFormatter::format_rule_validate_result(&result);
-                ResponseFormatter::create_formatted_response(&result, summary)
-                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
-            }
-            "rule_search" => {
-                let param: RuleSearchParam = serde_json::from_value(serde_json::Value::Object(
-                    request.arguments.unwrap_or_default(),
-                ))
-                .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
-                let result = self.rule_search(param).await.map_err(ErrorData::from)?;
-                let summary = ResponseFormatter::format_file_search_result(&result);
-                ResponseFormatter::create_formatted_response(&result, summary)
-                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
-            }
-            "rule_replace" => {
-                let param: RuleReplaceParam = serde_json::from_value(serde_json::Value::Object(
-                    request.arguments.unwrap_or_default(),
-                ))
-                .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))?;
-                let result = self.rule_replace(param).await.map_err(ErrorData::from)?;
-                let summary = ResponseFormatter::format_file_replace_result(&result);
-                ResponseFormatter::create_formatted_response(&result, summary)
-                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
-            }
-            "create_rule" => {
-                let param: CreateRuleParam = serde_json::from_value(serde_json::Value::Object(
-                    request.arguments.unwrap_or_default(),
-                ))
-                .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
-                let result = self.create_rule(param).await.map_err(ErrorData::from)?;
-                let json_value = serde_json::to_value(&result)
-                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))?;
-                Ok(CallToolResult::success(vec![Content::json(json_value)?]))
-            }
-            "list_rules" => {
-                let param: ListRulesParam = serde_json::from_value(serde_json::Value::Object(
-                    request.arguments.unwrap_or_default(),
-                ))
-                .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
-                let result = self.list_rules(param).await.map_err(ErrorData::from)?;
-                let json_value = serde_json::to_value(&result)
-                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))?;
-                Ok(CallToolResult::success(vec![Content::json(json_value)?]))
-            }
-            "get_rule" => {
-                let param: GetRuleParam = serde_json::from_value(serde_json::Value::Object(
-                    request.arguments.unwrap_or_default(),
-                ))
-                .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
-                let result = self.get_rule(param).await.map_err(ErrorData::from)?;
-                let json_value = serde_json::to_value(&result)
-                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))?;
-                Ok(CallToolResult::success(vec![Content::json(json_value)?]))
-            }
-            "delete_rule" => {
-                let param: DeleteRuleParam = serde_json::from_value(serde_json::Value::Object(
-                    request.arguments.unwrap_or_default(),
-                ))
-                .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
-                let result = self.delete_rule(param).await.map_err(ErrorData::from)?;
-                let json_value = serde_json::to_value(&result)
-                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))?;
-                Ok(CallToolResult::success(vec![Content::json(json_value)?]))
-            }
-            "list_catalog_rules" => {
-                let param: ListCatalogRulesParam = serde_json::from_value(
-                    serde_json::Value::Object(request.arguments.unwrap_or_default()),
-                )
-                .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
-                let result = self
-                    .list_catalog_rules(param)
-                    .await
-                    .map_err(ErrorData::from)?;
-                let json_value = serde_json::to_value(&result)
-                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))?;
-                Ok(CallToolResult::success(vec![Content::json(json_value)?]))
-            }
-            "import_catalog_rule" => {
-                let param: ImportCatalogRuleParam = serde_json::from_value(
-                    serde_json::Value::Object(request.arguments.unwrap_or_default()),
-                )
-                .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
-                let result = self
-                    .import_catalog_rule(param)
-                    .await
-                    .map_err(ErrorData::from)?;
-                let json_value = serde_json::to_value(&result)
-                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))?;
-                Ok(CallToolResult::success(vec![Content::json(json_value)?]))
-            }
-            "generate_ast" => {
-                let param: GenerateAstParam = serde_json::from_value(serde_json::Value::Object(
-                    request.arguments.unwrap_or_default(),
-                ))
-                .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
-                let result = self.generate_ast(param).await.map_err(ErrorData::from)?;
-                let summary = ResponseFormatter::format_generate_ast_result(&result);
-                ResponseFormatter::create_formatted_response(&result, summary)
-                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
-            }
-            "debug_pattern" => {
-                let param: DebugPatternParam = serde_json::from_value(serde_json::Value::Object(
-                    request.arguments.unwrap_or_default(),
-                ))
-                .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
-                let result = self
-                    .debug_service
-                    .debug_pattern(param)
-                    .await
-                    .map_err(ErrorData::from)?;
-                let summary = ResponseFormatter::format_debug_pattern_result(&result);
-                ResponseFormatter::create_formatted_response(&result, summary)
-                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
-            }
-            "debug_ast" => {
-                let param: DebugAstParam = serde_json::from_value(serde_json::Value::Object(
-                    request.arguments.unwrap_or_default(),
-                ))
-                .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
-                let result = self
-                    .debug_service
-                    .debug_ast(param)
-                    .await
-                    .map_err(ErrorData::from)?;
-                let summary = ResponseFormatter::format_debug_ast_result(&result);
-                ResponseFormatter::create_formatted_response(&result, summary)
-                    .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
-            }
-            _ => Err(ErrorData::method_not_found::<
-                rmcp::model::CallToolRequestMethod,
-            >()),
+        // Special handling for file_search with large results
+        if request.name == "file_search" {
+            return self.handle_file_search_with_optimization(request).await;
         }
+
+        // Special handling for documentation and list_languages which have custom implementations
+        match request.name.as_ref() {
+            "documentation" => self.handle_documentation_tool(request).await,
+            "list_languages" => self.handle_list_languages_tool(request).await,
+            _ => ToolRouter::route_tool_call(self, request).await,
+        }
+    }
+}
+
+impl AstGrepService {
+    /// Helper method to handle file_search with response optimization
+    async fn handle_file_search_with_optimization(
+        &self,
+        request: CallToolRequestParam,
+    ) -> Result<CallToolResult, ErrorData> {
+        let param: FileSearchParam = serde_json::from_value(serde_json::Value::Object(
+            request.arguments.clone().unwrap_or_default(),
+        ))
+        .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
+
+        let result = self.file_search(param).await.map_err(ErrorData::from)?;
+        let summary = ResponseFormatter::format_file_search_result(&result);
+
+        // Use lightweight response for large results to avoid token limits
+        let total_matches: usize = result.matches.iter().map(|f| f.matches.len()).sum();
+        if result.matches.len() > 10 || total_matches > 50 {
+            ResponseFormatter::create_lightweight_response_for_file_search(&result, summary)
+                .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
+        } else {
+            ResponseFormatter::create_formatted_response(&result, summary)
+                .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
+        }
+    }
+
+    /// Helper method to handle documentation tool
+    async fn handle_documentation_tool(
+        &self,
+        request: CallToolRequestParam,
+    ) -> Result<CallToolResult, ErrorData> {
+        let param: DocumentationParam = serde_json::from_value(serde_json::Value::Object(
+            request.arguments.unwrap_or_default(),
+        ))
+        .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
+        let result = self.documentation(param).await.map_err(ErrorData::from)?;
+        let summary = ResponseFormatter::format_documentation_result(&result);
+        ResponseFormatter::create_formatted_response(&result, summary)
+            .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
+    }
+
+    /// Helper method to handle list_languages tool
+    async fn handle_list_languages_tool(
+        &self,
+        request: CallToolRequestParam,
+    ) -> Result<CallToolResult, ErrorData> {
+        let param: ListLanguagesParam = serde_json::from_value(serde_json::Value::Object(
+            request.arguments.unwrap_or_default(),
+        ))
+        .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
+        let result = self.list_languages(param).await.map_err(ErrorData::from)?;
+        let summary = ResponseFormatter::format_list_languages_result(&result);
+        ResponseFormatter::create_formatted_response(&result, summary)
+            .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
     }
 }
 

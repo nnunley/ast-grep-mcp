@@ -8,6 +8,7 @@
 .idea/
 *.swp
 *.swo
+.cursor/
 
 # OS
 .DS_Store
@@ -19,8 +20,13 @@ Thumbs.db
 # Environment
 .env
 .env.local
-.docs-cache
-.claude
+
+# Cache directories
+.docs-cache/
+.cache/
+
+# Claude Code specific
+.claude/
 .cursor*.db
 *.db-shm
 *.db-wal
@@ -29,3 +35,11 @@ Thumbs.db
 coverage/
 lcov.info
 cobertura.xml
+
+# Test artifacts
+test_*.js
+test_*.ts
+test_*.yaml
+test_*.yml
+*.tmp
+*.temp
