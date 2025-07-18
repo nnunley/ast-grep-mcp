@@ -384,101 +384,88 @@ cargo fmt
 **Scripting**: Python, Ruby, Lua, Bash
 **Others**: Swift, Dart, Elixir, Haskell, PHP, YAML, JSON
 
-## 🗺️ Development Roadmap
+## 🗺️ Practical Development Roadmap
 
-This roadmap outlines planned enhancements to make ast-grep MCP more useful for AI-assisted development workflows.
+Based on real-world usage patterns and user feedback, we're focusing on simple, high-value features that complement LLM capabilities rather than duplicate them.
 
-### 🚀 Phase 1: LLM-Friendly Pattern Discovery (v0.2.0)
+### 🎯 Phase 1: Core Excellence (v0.1.1)
 
-**High Priority - Essential for LLM workflows**
+**Immediate Priority - Fix and Polish**
 
-- [ ] **`suggest_patterns`** - Given code examples, suggest matching ast-grep patterns
-  - Reduces pattern-writing friction for LLMs
-  - Input: example code → Output: suggested patterns with confidence scores
+- [ ] **Fix language injection** - Complete the automatic language detection for HTML/JS/CSS
+- [ ] **Performance optimization** - Improve handling of large codebases (>10k files)
+- [ ] **Better error messages** - Clear, actionable error messages with suggestions
+- [ ] **Edge case handling** - Robustness improvements for malformed code
 
-- [ ] **`analyze_change_impact`** - Analyze potential impact before applying changes
-  - Essential for safe AI-driven refactoring
-  - Returns: affected functions, breaking change risk, test coverage impact
+### 🚀 Phase 2: High-Value Tools (v0.2.0)
 
-- [ ] **`search_by_intent`** - Natural language code search
-  - "Find all functions that make HTTP requests" → multiple ast-grep patterns
-  - More intuitive than writing complex patterns manually
+**Simple features that fill real gaps**
 
-### 🔧 Phase 2: Semantic Code Understanding (v0.3.0)
+- [ ] **`find_usage`** - Track where symbols are used across codebases
+  ```json
+  {
+    "symbol": "functionName",
+    "type": "imports|calls|definitions"
+  }
+  ```
 
-**Medium Priority - Enhanced code analysis**
+- [ ] **`validate_pattern`** - Test patterns against sample code
+  ```json
+  {
+    "pattern": "console.log($MSG)",
+    "test_code": "console.log('hello');",
+    "language": "javascript"
+  }
+  ```
 
-- [ ] **`find_similar_patterns`** - Semantic similarity detection
-  - Find code that does the same thing but looks different
-  - Useful for comprehensive refactoring across different coding styles
+- [ ] **`preview_changes`** - Simple list of files that would be affected
+  ```json
+  {
+    "pattern": "var $X = $Y",
+    "replacement": "const $X = $Y",
+    "path_pattern": "**/*.js"
+  }
+  ```
 
-- [ ] **`analyze_code_context`** - Extract code relationships
-  - Function signatures, imports, dependencies, call graphs
-  - Provides context LLMs need for informed decisions
+### ✨ Phase 3: Polish (v0.3.0)
 
-- [ ] **`bulk_refactor`** - Multi-step transformation pipeline
-  - Apply multiple rules in sequence with dependency handling
-  - Handles complex refactoring requiring coordinated changes
+**Nice-to-have improvements**
 
-- [ ] **`verify_transformation_safety`** - Semantic preservation checking
-  - Verify transformations don't change program behavior
-  - AST comparison and basic semantic analysis
-
-### 🧠 Phase 3: Project Intelligence (v0.4.0)
-
-**Lower Priority - Advanced analysis**
-
-- [ ] **`learn_project_patterns`** - Discover codebase conventions
-  - Analyze project to learn patterns, naming conventions, architecture
-  - Enables context-aware suggestions for specific projects
-
-- [ ] **`detect_code_smells`** - Predefined anti-pattern detection
-  - Common code smell detection with explanations and fixes
-  - Extensible rule system for custom smell detection
-
-- [ ] **`generate_test_cases`** - Automated test generation
-  - Generate tests for code matching certain patterns
-  - Ensures transformations are properly validated
-
-- [ ] **`extract_documentation`** - Smart documentation extraction
-  - Extract and format docs from code patterns
-  - Helps LLMs understand unfamiliar codebases quickly
-
-- [ ] **`suggest_project_rules`** - Consistency rule generation
-  - Based on project analysis, suggest custom rules
-  - Maintains consistency during AI-assisted development
+- [ ] **Enhanced language injection** - Support for more embedded languages
+- [ ] **Performance profiling** - Help users optimize their patterns
+- [ ] **Batch operation improvements** - Better progress reporting for large operations
 
 ### 🔍 Implementation Status
 
 **Current Version: v0.1.0**
 - ✅ Core ast-grep pattern matching
 - ✅ Rule-based search and replace
+- ✅ `suggest_patterns` - Already implemented!
 - ✅ Tree-sitter node kind discovery
 - ✅ Token-efficient diff output
 - ✅ MCP service integration
+- ⚠️ Partial language injection (2/5 tests passing)
 
-**Next Milestones:**
-- 🔄 Fix failing end-to-end tests
-- 🎯 Phase 1: Pattern discovery tools
-- 🎯 Phase 2: Semantic understanding
-- 🎯 Phase 3: Project intelligence
+**Focus**: Making the core tool excellent rather than adding complex "smart" features
 
-### 💡 Vision: AI-Native Code Understanding
+### 💡 Vision: Simple Tools, Maximum Value
 
-Transform ast-grep from a pattern matching tool into an AI-native platform that:
-- **Understands intent** rather than just syntax
-- **Provides context** for informed AI decisions
-- **Ensures safety** through impact analysis
-- **Learns from codebases** to provide relevant suggestions
-- **Bridges the gap** between natural language and code patterns
+Keep ast-grep MCP focused on what it does best:
+- **Fast pattern matching** at scale
+- **Reliable transformations** with safety features
+- **Simple tools** that complement LLM capabilities
+- **Predictable behavior** that LLMs can rely on
+- **Efficient operations** on large codebases
 
 ### 🤝 Contributing to the Roadmap
 
-We welcome contributions to any roadmap items:
+We welcome contributions that align with our focused approach:
 
-1. **High Priority Items**: `suggest_patterns`, `analyze_change_impact`, `search_by_intent`
-2. **Good First Issues**: Documentation improvements, test coverage
-3. **Advanced Features**: Semantic analysis, ML-based pattern suggestion
+1. **High Priority Items**: Performance optimization, dependency tracking, pattern validation
+2. **Good First Issues**: Fix language injection tests, documentation improvements, test coverage
+3. **Core Improvements**: Error handling, edge cases, batch operation efficiency
+
+**Note**: See [ROADMAP_ANALYSIS.md](ROADMAP_ANALYSIS.md) for detailed analysis of which features provide real value versus complexity.
 
 ## 📋 Technical Architecture & Implementation Notes
 
