@@ -1,18 +1,14 @@
 //! Test automatic language injection for HTML/JS/CSS
 
 use ast_grep_mcp::{
-    FileSearchParam, SearchParam, config::ServiceConfig, pattern::PatternMatcher,
-    rules::RuleEvaluator, search::SearchService,
+    FileSearchParam, SearchParam, ast_grep_service::AstGrepService, config::ServiceConfig,
 };
 use std::fs;
 use tempfile::TempDir;
 
 #[tokio::test]
 async fn test_automatic_js_in_html_search() {
-    let config = ServiceConfig::default();
-    let pattern_matcher = PatternMatcher::new();
-    let rule_evaluator = RuleEvaluator::new();
-    let service = SearchService::new(config, pattern_matcher, rule_evaluator);
+    let service = AstGrepService::new();
 
     let html_code = r#"
 <!DOCTYPE html>
@@ -56,10 +52,7 @@ async fn test_automatic_js_in_html_search() {
 
 #[tokio::test]
 async fn test_automatic_css_in_html_search() {
-    let config = ServiceConfig::default();
-    let pattern_matcher = PatternMatcher::new();
-    let rule_evaluator = RuleEvaluator::new();
-    let service = SearchService::new(config, pattern_matcher, rule_evaluator);
+    let service = AstGrepService::new();
 
     let html_code = r#"
 <!DOCTYPE html>
@@ -140,9 +133,7 @@ async fn test_automatic_js_in_html_file() {
         root_directories: vec![temp_dir.path().to_path_buf()],
         ..Default::default()
     };
-    let pattern_matcher = PatternMatcher::new();
-    let rule_evaluator = RuleEvaluator::new();
-    let service = SearchService::new(config, pattern_matcher, rule_evaluator);
+    let service = AstGrepService::with_config(config);
 
     let param = FileSearchParam {
         path_pattern: test_file.to_string_lossy().to_string(),
@@ -194,9 +185,7 @@ greet("World");
         root_directories: vec![temp_dir.path().to_path_buf()],
         ..Default::default()
     };
-    let pattern_matcher = PatternMatcher::new();
-    let rule_evaluator = RuleEvaluator::new();
-    let service = SearchService::new(config, pattern_matcher, rule_evaluator);
+    let service = AstGrepService::with_config(config);
 
     let param = FileSearchParam {
         path_pattern: test_file.to_string_lossy().to_string(),
@@ -266,9 +255,7 @@ h1 {
         root_directories: vec![temp_dir.path().to_path_buf()],
         ..Default::default()
     };
-    let pattern_matcher = PatternMatcher::new();
-    let rule_evaluator = RuleEvaluator::new();
-    let service = SearchService::new(config, pattern_matcher, rule_evaluator);
+    let service = AstGrepService::with_config(config);
 
     let param = FileSearchParam {
         path_pattern: test_file.to_string_lossy().to_string(),
