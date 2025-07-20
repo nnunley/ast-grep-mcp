@@ -1,0 +1,6 @@
+id: replace-console-log
+language: javascript
+message: "Replace console.log with console.warn"
+rule:
+  pattern: "console.log($MSG)"
+fix: "console.warn($MSG)"

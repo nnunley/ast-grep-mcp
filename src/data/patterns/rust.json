@@ -1,0 +1,224 @@
+{
+  "language": "rust",
+  "patterns": [
+    {
+      "id": "rust_function_declaration",
+      "pattern": "fn $NAME($$$PARAMS) -> $RETURN { $$$BODY }",
+      "description": "Match Rust function declarations with return type",
+      "examples": [
+        "fn add(a: i32, b: i32) -> i32 { a + b }",
+        "fn greet(name: &str) -> String { format!(\"Hello, {}!\", name) }"
+      ],
+      "difficulty": "intermediate",
+      "category": "functions",
+      "tags": ["functions", "declarations", "return-types"],
+      "prerequisites": [],
+      "related_patterns": ["rust_function_no_return", "rust_impl_method"],
+      "learning_notes": "Rust functions explicitly declare parameter and return types. The -> $RETURN captures the return type annotation."
+    },
+    {
+      "id": "rust_function_no_return",
+      "pattern": "fn $NAME($$$PARAMS) { $$$BODY }",
+      "description": "Match Rust functions without explicit return type (unit type)",
+      "examples": [
+        "fn print_message(msg: &str) { println!(\"{}\", msg); }",
+        "fn setup() { initialize(); configure(); }"
+      ],
+      "difficulty": "beginner",
+      "category": "functions",
+      "tags": ["functions", "unit-type", "side-effects"],
+      "prerequisites": [],
+      "related_patterns": ["rust_function_declaration", "rust_println"],
+      "learning_notes": "Functions without explicit return type return the unit type (). These are typically used for side effects."
+    },
+    {
+      "id": "rust_println",
+      "pattern": "println!($$$ARGS)",
+      "description": "Match println! macro calls",
+      "examples": [
+        "println!(\"Hello, world!\")",
+        "println!(\"Value: {}\", x)",
+        "println!(\"Debug: {:?}\", data)"
+      ],
+      "difficulty": "beginner",
+      "category": "debugging",
+      "tags": ["macros", "printing", "debugging", "formatting"],
+      "prerequisites": [],
+      "related_patterns": ["rust_print", "rust_eprintln", "rust_dbg"],
+      "learning_notes": "println! is a macro (note the !) that prints to stdout with a newline. Supports format strings and multiple arguments."
+    },
+    {
+      "id": "rust_print",
+      "pattern": "print!($$$ARGS)",
+      "description": "Match print! macro calls (without newline)",
+      "examples": [
+        "print!(\"Loading...\")",
+        "print!(\"{} \", item)"
+      ],
+      "difficulty": "beginner",
+      "category": "debugging",
+      "tags": ["macros", "printing", "formatting"],
+      "prerequisites": ["rust_println"],
+      "related_patterns": ["rust_println", "rust_eprint"],
+      "learning_notes": "print! is like println! but doesn't add a newline. Useful for building output incrementally."
+    },
+    {
+      "id": "rust_variable_let",
+      "pattern": "let $NAME = $VALUE;",
+      "description": "Match immutable variable declarations",
+      "examples": [
+        "let x = 42;",
+        "let message = \"Hello\";"
+      ],
+      "difficulty": "beginner",
+      "category": "variables",
+      "tags": ["variables", "immutable", "binding"],
+      "prerequisites": [],
+      "related_patterns": ["rust_variable_mut", "rust_variable_type"],
+      "learning_notes": "Rust variables are immutable by default. The semicolon is required for statements."
+    },
+    {
+      "id": "rust_variable_mut",
+      "pattern": "let mut $NAME = $VALUE;",
+      "description": "Match mutable variable declarations",
+      "examples": [
+        "let mut counter = 0;",
+        "let mut data = Vec::new();"
+      ],
+      "difficulty": "beginner",
+      "category": "variables",
+      "tags": ["variables", "mutable", "mut"],
+      "prerequisites": ["rust_variable_let"],
+      "related_patterns": ["rust_variable_let", "rust_variable_type"],
+      "learning_notes": "The mut keyword makes variables mutable. Rust encourages immutability by default for safety."
+    },
+    {
+      "id": "rust_variable_type",
+      "pattern": "let $NAME: $TYPE = $VALUE;",
+      "description": "Match variable declarations with explicit type annotation",
+      "examples": [
+        "let count: i32 = 10;",
+        "let name: String = \"Alice\".to_string();"
+      ],
+      "difficulty": "intermediate",
+      "category": "variables",
+      "tags": ["variables", "types", "annotations"],
+      "prerequisites": ["rust_variable_let"],
+      "related_patterns": ["rust_variable_let", "rust_variable_mut"],
+      "learning_notes": "Type annotations are optional when Rust can infer the type, but useful for clarity or when inference fails."
+    },
+    {
+      "id": "rust_struct_definition",
+      "pattern": "struct $NAME { $$$FIELDS }",
+      "description": "Match struct definitions",
+      "examples": [
+        "struct Point { x: i32, y: i32 }",
+        "struct User { name: String, age: u32, email: String }"
+      ],
+      "difficulty": "intermediate",
+      "category": "data-structures",
+      "tags": ["structs", "types", "definitions"],
+      "prerequisites": ["rust_variable_type"],
+      "related_patterns": ["rust_struct_impl", "rust_struct_new"],
+      "learning_notes": "Structs define custom data types. Each field has a name and type. This is fundamental to Rust's type system."
+    },
+    {
+      "id": "rust_impl_block",
+      "pattern": "impl $TYPE { $$$METHODS }",
+      "description": "Match impl blocks for types",
+      "examples": [
+        "impl Point { fn new(x: i32, y: i32) -> Point { Point { x, y } } }"
+      ],
+      "difficulty": "advanced",
+      "category": "methods",
+      "tags": ["impl", "methods", "associated-functions"],
+      "prerequisites": ["rust_struct_definition", "rust_function_declaration"],
+      "related_patterns": ["rust_struct_definition", "rust_impl_trait"],
+      "learning_notes": "impl blocks define methods and associated functions for types. This is how Rust implements object-oriented patterns."
+    },
+    {
+      "id": "rust_match_expression",
+      "pattern": "match $EXPR { $$$ARMS }",
+      "description": "Match expressions for pattern matching",
+      "examples": [
+        "match value { Some(x) => x, None => 0 }",
+        "match status { Ok(data) => process(data), Err(e) => handle_error(e) }"
+      ],
+      "difficulty": "advanced",
+      "category": "pattern-matching",
+      "tags": ["match", "pattern-matching", "control-flow"],
+      "prerequisites": ["rust_variable_let"],
+      "related_patterns": ["rust_if_let", "rust_while_let"],
+      "learning_notes": "match is Rust's powerful pattern matching construct. All possible cases must be handled (exhaustiveness)."
+    }
+  ],
+  "learning_progressions": [
+    {
+      "name": "rust_fundamentals",
+      "title": "Rust Fundamentals",
+      "description": "Learn Rust from basic syntax to advanced patterns",
+      "levels": [
+        {
+          "level": 1,
+          "title": "Basic Syntax and Variables",
+          "patterns": ["rust_variable_let", "rust_println"],
+          "skills": ["Variable binding", "Basic output"],
+          "learning_objectives": ["Understand immutability by default", "Use println! for output"]
+        },
+        {
+          "level": 2,
+          "title": "Mutability and Types",
+          "patterns": ["rust_variable_mut", "rust_variable_type"],
+          "skills": ["Mutable variables", "Type annotations"],
+          "learning_objectives": ["Use mut keyword appropriately", "Understand Rust's type system"]
+        },
+        {
+          "level": 3,
+          "title": "Functions",
+          "patterns": ["rust_function_no_return", "rust_function_declaration"],
+          "skills": ["Function definition", "Return types"],
+          "learning_objectives": ["Write functions", "Handle return values"]
+        },
+        {
+          "level": 4,
+          "title": "Data Structures",
+          "patterns": ["rust_struct_definition", "rust_impl_block"],
+          "skills": ["Custom types", "Methods"],
+          "learning_objectives": ["Define structs", "Implement methods"]
+        }
+      ]
+    }
+  ],
+  "categories": {
+    "functions": {
+      "name": "Functions",
+      "description": "Function definitions and calls",
+      "patterns": ["rust_function_declaration", "rust_function_no_return"]
+    },
+    "variables": {
+      "name": "Variables",
+      "description": "Variable bindings and mutability",
+      "patterns": ["rust_variable_let", "rust_variable_mut", "rust_variable_type"]
+    },
+    "debugging": {
+      "name": "Debugging",
+      "description": "Print macros and debugging tools",
+      "patterns": ["rust_println", "rust_print"]
+    },
+    "data-structures": {
+      "name": "Data Structures",
+      "description": "Structs and custom types",
+      "patterns": ["rust_struct_definition"]
+    },
+    "methods": {
+      "name": "Methods",
+      "description": "Implementation blocks and methods",
+      "patterns": ["rust_impl_block"]
+    },
+    "pattern-matching": {
+      "name": "Pattern Matching",
+      "description": "Match expressions and pattern destructuring",
+      "patterns": ["rust_match_expression"]
+    }
+  }
+}

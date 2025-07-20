@@ -1,0 +1,214 @@
+{
+  "language": "javascript",
+  "patterns": [
+    {
+      "id": "js_function_declaration",
+      "pattern": "function $NAME($$$PARAMS) { $$$BODY }",
+      "description": "Match function declarations with parameters and body",
+      "examples": [
+        "function test() { return 42; }",
+        "function add(a, b) { return a + b; }"
+      ],
+      "difficulty": "beginner",
+      "category": "functions",
+      "tags": ["functions", "declarations"],
+      "prerequisites": [],
+      "related_patterns": ["js_arrow_function", "js_function_expression"],
+      "learning_notes": "Functions are fundamental building blocks. The $NAME captures the function name, $$$PARAMS captures all parameters, and $$$BODY captures all statements in the function body."
+    },
+    {
+      "id": "js_arrow_function",
+      "pattern": "($$$PARAMS) => { $$$BODY }",
+      "description": "Match arrow functions with block body",
+      "examples": [
+        "(x) => { return x * 2; }",
+        "(a, b) => { console.log(a + b); }"
+      ],
+      "difficulty": "beginner",
+      "category": "functions",
+      "tags": ["functions", "arrow", "es6"],
+      "prerequisites": ["js_function_declaration"],
+      "related_patterns": ["js_arrow_function_expression", "js_function_declaration"],
+      "learning_notes": "Arrow functions are a modern ES6 syntax. This pattern captures the parameters and body of arrow functions with explicit blocks."
+    },
+    {
+      "id": "js_arrow_function_expression",
+      "pattern": "($$$PARAMS) => $EXPR",
+      "description": "Match arrow functions with expression body",
+      "examples": [
+        "(x) => x * 2",
+        "(a, b) => a + b"
+      ],
+      "difficulty": "intermediate",
+      "category": "functions",
+      "tags": ["functions", "arrow", "expressions", "es6"],
+      "prerequisites": ["js_arrow_function"],
+      "related_patterns": ["js_arrow_function", "js_function_expression"],
+      "learning_notes": "Expression arrow functions don't need explicit return statements or braces. The expression result is automatically returned."
+    },
+    {
+      "id": "js_console_log",
+      "pattern": "console.log($$$ARGS)",
+      "description": "Match console.log statements with any number of arguments",
+      "examples": [
+        "console.log('hello')",
+        "console.log(variable, 'debug', 123)"
+      ],
+      "difficulty": "beginner",
+      "category": "debugging",
+      "tags": ["console", "debugging", "logging"],
+      "prerequisites": [],
+      "related_patterns": ["js_console_other", "js_console_warn"],
+      "learning_notes": "console.log is the most common debugging tool. The $$$ARGS captures all arguments passed to the log function."
+    },
+    {
+      "id": "js_console_other",
+      "pattern": "console.$METHOD($$$ARGS)",
+      "description": "Match any console method call",
+      "examples": [
+        "console.warn('warning')",
+        "console.error(err)",
+        "console.info('info')"
+      ],
+      "difficulty": "intermediate",
+      "category": "debugging",
+      "tags": ["console", "debugging", "methods"],
+      "prerequisites": ["js_console_log"],
+      "related_patterns": ["js_console_log"],
+      "learning_notes": "The console object has many methods beyond log. $METHOD captures the specific method name (warn, error, info, etc.)."
+    },
+    {
+      "id": "js_variable_const",
+      "pattern": "const $NAME = $VALUE",
+      "description": "Match const variable declarations",
+      "examples": [
+        "const x = 5",
+        "const message = 'hello world'"
+      ],
+      "difficulty": "beginner",
+      "category": "variables",
+      "tags": ["variables", "const", "declarations"],
+      "prerequisites": [],
+      "related_patterns": ["js_variable_let", "js_variable_var"],
+      "learning_notes": "const declares immutable variables. The value cannot be reassigned after declaration."
+    },
+    {
+      "id": "js_variable_let",
+      "pattern": "let $NAME = $VALUE",
+      "description": "Match let variable declarations",
+      "examples": [
+        "let count = 0",
+        "let name = 'John'"
+      ],
+      "difficulty": "beginner",
+      "category": "variables",
+      "tags": ["variables", "let", "declarations"],
+      "prerequisites": ["js_variable_const"],
+      "related_patterns": ["js_variable_const", "js_variable_var"],
+      "learning_notes": "let declares mutable variables with block scope. Prefer let over var for better scoping behavior."
+    },
+    {
+      "id": "js_variable_var",
+      "pattern": "var $NAME = $VALUE",
+      "description": "Match var variable declarations (legacy)",
+      "examples": [
+        "var x = 5",
+        "var global = 'value'"
+      ],
+      "difficulty": "intermediate",
+      "category": "variables",
+      "tags": ["variables", "var", "legacy"],
+      "prerequisites": ["js_variable_let"],
+      "related_patterns": ["js_variable_let", "js_variable_const"],
+      "learning_notes": "var is the legacy way to declare variables. It has function scope and hoisting behavior. Prefer const/let in modern JavaScript."
+    },
+    {
+      "id": "js_if_statement",
+      "pattern": "if ($CONDITION) { $$$BODY }",
+      "description": "Match if statements with block body",
+      "examples": [
+        "if (x > 0) { console.log('positive'); }",
+        "if (user.isValid) { doSomething(); }"
+      ],
+      "difficulty": "beginner",
+      "category": "conditionals",
+      "tags": ["conditionals", "if", "control-flow"],
+      "prerequisites": [],
+      "related_patterns": ["js_if_else", "js_ternary"],
+      "learning_notes": "if statements control program flow based on conditions. The $CONDITION captures the boolean expression, $$$BODY captures all statements in the if block."
+    },
+    {
+      "id": "js_if_else",
+      "pattern": "if ($CONDITION) { $$$IF_BODY } else { $$$ELSE_BODY }",
+      "description": "Match if-else statements",
+      "examples": [
+        "if (x > 0) { console.log('positive'); } else { console.log('non-positive'); }"
+      ],
+      "difficulty": "intermediate",
+      "category": "conditionals",
+      "tags": ["conditionals", "if-else", "control-flow"],
+      "prerequisites": ["js_if_statement"],
+      "related_patterns": ["js_if_statement", "js_ternary"],
+      "learning_notes": "if-else provides two execution paths. This pattern captures both the if and else blocks separately."
+    }
+  ],
+  "learning_progressions": [
+    {
+      "name": "javascript_basics",
+      "title": "JavaScript Fundamentals",
+      "description": "Learn basic JavaScript patterns from variables to functions",
+      "levels": [
+        {
+          "level": 1,
+          "title": "Variables and Basic Syntax",
+          "patterns": ["js_variable_const", "js_console_log"],
+          "skills": ["Variable declaration", "Basic output"],
+          "learning_objectives": ["Understand const declarations", "Use console.log for debugging"]
+        },
+        {
+          "level": 2,
+          "title": "Variable Types and Scope",
+          "patterns": ["js_variable_let", "js_variable_var"],
+          "skills": ["Variable scope", "Mutable vs immutable"],
+          "learning_objectives": ["Distinguish between const/let/var", "Understand block vs function scope"]
+        },
+        {
+          "level": 3,
+          "title": "Functions",
+          "patterns": ["js_function_declaration", "js_arrow_function"],
+          "skills": ["Function declaration", "Modern ES6 syntax"],
+          "learning_objectives": ["Create functions", "Use arrow function syntax"]
+        },
+        {
+          "level": 4,
+          "title": "Control Flow",
+          "patterns": ["js_if_statement", "js_if_else"],
+          "skills": ["Conditional logic", "Program flow control"],
+          "learning_objectives": ["Write conditional statements", "Handle multiple execution paths"]
+        }
+      ]
+    }
+  ],
+  "categories": {
+    "functions": {
+      "name": "Functions",
+      "description": "Function declarations, expressions, and calls",
+      "patterns": ["js_function_declaration", "js_arrow_function", "js_arrow_function_expression"]
+    },
+    "variables": {
+      "name": "Variables",
+      "description": "Variable declarations and assignments",
+      "patterns": ["js_variable_const", "js_variable_let", "js_variable_var"]
+    },
+    "debugging": {
+      "name": "Debugging",
+      "description": "Console methods and debugging patterns",
+      "patterns": ["js_console_log", "js_console_other"]
+    },
+    "conditionals": {
+      "name": "Conditionals",
+      "description": "If statements and conditional logic",
+      "patterns": ["js_if_statement", "js_if_else"]
+    }
+  }
+}

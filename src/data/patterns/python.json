@@ -1,0 +1,246 @@
+{
+  "language": "python",
+  "patterns": [
+    {
+      "id": "python_function_def",
+      "pattern": "def $NAME($$$PARAMS): $$$BODY",
+      "description": "Match Python function definitions",
+      "examples": [
+        "def greet(name): return f'Hello {name}'",
+        "def add(a, b): return a + b"
+      ],
+      "difficulty": "beginner",
+      "category": "functions",
+      "tags": ["functions", "def", "definitions"],
+      "prerequisites": [],
+      "related_patterns": ["python_function_typed", "python_lambda"],
+      "learning_notes": "Python functions use the def keyword. The colon is required, and the body is indented."
+    },
+    {
+      "id": "python_function_typed",
+      "pattern": "def $NAME($$$PARAMS) -> $RETURN: $$$BODY",
+      "description": "Match Python functions with type hints",
+      "examples": [
+        "def add(a: int, b: int) -> int: return a + b",
+        "def greet(name: str) -> str: return f'Hello {name}'"
+      ],
+      "difficulty": "intermediate",
+      "category": "functions",
+      "tags": ["functions", "type-hints", "annotations"],
+      "prerequisites": ["python_function_def"],
+      "related_patterns": ["python_function_def", "python_variable_typed"],
+      "learning_notes": "Type hints help with code clarity and tool support. The -> syntax indicates the return type."
+    },
+    {
+      "id": "python_class_def",
+      "pattern": "class $NAME($$$BASES): $$$BODY",
+      "description": "Match Python class definitions",
+      "examples": [
+        "class Person: pass",
+        "class Student(Person): def __init__(self, name): self.name = name"
+      ],
+      "difficulty": "intermediate",
+      "category": "classes",
+      "tags": ["classes", "oop", "inheritance"],
+      "prerequisites": ["python_function_def"],
+      "related_patterns": ["python_init_method", "python_method_def"],
+      "learning_notes": "Classes define object types. Inheritance is shown in parentheses. The body contains methods and attributes."
+    },
+    {
+      "id": "python_init_method",
+      "pattern": "def __init__(self, $$$PARAMS): $$$BODY",
+      "description": "Match Python constructor methods",
+      "examples": [
+        "def __init__(self, name): self.name = name",
+        "def __init__(self, x, y): self.x = x; self.y = y"
+      ],
+      "difficulty": "intermediate",
+      "category": "classes",
+      "tags": ["classes", "constructor", "init", "methods"],
+      "prerequisites": ["python_class_def"],
+      "related_patterns": ["python_class_def", "python_method_def"],
+      "learning_notes": "__init__ is the constructor method. 'self' is always the first parameter, referring to the instance."
+    },
+    {
+      "id": "python_print",
+      "pattern": "print($$$ARGS)",
+      "description": "Match print function calls",
+      "examples": [
+        "print('Hello, world!')",
+        "print(f'Value: {x}')",
+        "print(a, b, sep=', ')"
+      ],
+      "difficulty": "beginner",
+      "category": "debugging",
+      "tags": ["print", "output", "debugging"],
+      "prerequisites": [],
+      "related_patterns": ["python_f_string", "python_format"],
+      "learning_notes": "print() is Python's standard output function. It can take multiple arguments and formatting options."
+    },
+    {
+      "id": "python_variable_assignment",
+      "pattern": "$NAME = $VALUE",
+      "description": "Match variable assignments",
+      "examples": [
+        "x = 42",
+        "message = 'Hello, world!'",
+        "data = [1, 2, 3]"
+      ],
+      "difficulty": "beginner",
+      "category": "variables",
+      "tags": ["variables", "assignment"],
+      "prerequisites": [],
+      "related_patterns": ["python_variable_typed", "python_multiple_assignment"],
+      "learning_notes": "Python uses simple assignment with =. Variables are dynamically typed and don't need declaration."
+    },
+    {
+      "id": "python_variable_typed",
+      "pattern": "$NAME: $TYPE = $VALUE",
+      "description": "Match variable assignments with type hints",
+      "examples": [
+        "count: int = 0",
+        "name: str = 'Alice'",
+        "items: list[str] = []"
+      ],
+      "difficulty": "intermediate",
+      "category": "variables",
+      "tags": ["variables", "type-hints", "annotations"],
+      "prerequisites": ["python_variable_assignment"],
+      "related_patterns": ["python_variable_assignment", "python_function_typed"],
+      "learning_notes": "Type hints are optional but helpful for code clarity and tooling. They don't affect runtime behavior."
+    },
+    {
+      "id": "python_if_statement",
+      "pattern": "if $CONDITION: $$$BODY",
+      "description": "Match if statements",
+      "examples": [
+        "if x > 0: print('positive')",
+        "if user.is_valid(): process_user(user)"
+      ],
+      "difficulty": "beginner",
+      "category": "conditionals",
+      "tags": ["conditionals", "if", "control-flow"],
+      "prerequisites": [],
+      "related_patterns": ["python_if_else", "python_elif"],
+      "learning_notes": "Python if statements use colons and indentation. No parentheses needed around conditions."
+    },
+    {
+      "id": "python_if_else",
+      "pattern": "if $CONDITION: $$$IF_BODY\nelse: $$$ELSE_BODY",
+      "description": "Match if-else statements",
+      "examples": [
+        "if x > 0: print('positive')\nelse: print('non-positive')"
+      ],
+      "difficulty": "intermediate",
+      "category": "conditionals",
+      "tags": ["conditionals", "if-else", "control-flow"],
+      "prerequisites": ["python_if_statement"],
+      "related_patterns": ["python_if_statement", "python_elif"],
+      "learning_notes": "else must be at the same indentation level as the corresponding if. The colon is required."
+    },
+    {
+      "id": "python_for_loop",
+      "pattern": "for $VAR in $ITERABLE: $$$BODY",
+      "description": "Match for loops",
+      "examples": [
+        "for item in items: print(item)",
+        "for i in range(10): process(i)"
+      ],
+      "difficulty": "beginner",
+      "category": "loops",
+      "tags": ["loops", "iteration", "for"],
+      "prerequisites": [],
+      "related_patterns": ["python_while_loop", "python_list_comprehension"],
+      "learning_notes": "Python for loops iterate over any iterable. Common with lists, ranges, strings, etc."
+    },
+    {
+      "id": "python_list_comprehension",
+      "pattern": "[$EXPR for $VAR in $ITERABLE]",
+      "description": "Match list comprehensions",
+      "examples": [
+        "[x * 2 for x in numbers]",
+        "[name.upper() for name in names]"
+      ],
+      "difficulty": "intermediate",
+      "category": "comprehensions",
+      "tags": ["comprehensions", "lists", "functional"],
+      "prerequisites": ["python_for_loop"],
+      "related_patterns": ["python_for_loop", "python_dict_comprehension"],
+      "learning_notes": "List comprehensions are a concise way to create lists. They're often more readable than equivalent for loops."
+    }
+  ],
+  "learning_progressions": [
+    {
+      "name": "python_basics",
+      "title": "Python Fundamentals",
+      "description": "Learn Python from basic syntax to intermediate concepts",
+      "levels": [
+        {
+          "level": 1,
+          "title": "Variables and Output",
+          "patterns": ["python_variable_assignment", "python_print"],
+          "skills": ["Variable assignment", "Basic output"],
+          "learning_objectives": ["Assign values to variables", "Use print for output"]
+        },
+        {
+          "level": 2,
+          "title": "Functions",
+          "patterns": ["python_function_def"],
+          "skills": ["Function definition", "Parameters and return values"],
+          "learning_objectives": ["Define functions", "Use parameters and return statements"]
+        },
+        {
+          "level": 3,
+          "title": "Control Flow",
+          "patterns": ["python_if_statement", "python_for_loop"],
+          "skills": ["Conditional logic", "Iteration"],
+          "learning_objectives": ["Write conditional statements", "Iterate over sequences"]
+        },
+        {
+          "level": 4,
+          "title": "Object-Oriented Programming",
+          "patterns": ["python_class_def", "python_init_method"],
+          "skills": ["Class definition", "Object initialization"],
+          "learning_objectives": ["Define classes", "Create constructors"]
+        }
+      ]
+    }
+  ],
+  "categories": {
+    "functions": {
+      "name": "Functions",
+      "description": "Function definitions and calls",
+      "patterns": ["python_function_def", "python_function_typed"]
+    },
+    "variables": {
+      "name": "Variables",
+      "description": "Variable assignments and type hints",
+      "patterns": ["python_variable_assignment", "python_variable_typed"]
+    },
+    "classes": {
+      "name": "Classes",
+      "description": "Class definitions and methods",
+      "patterns": ["python_class_def", "python_init_method"]
+    },
+    "debugging": {
+      "name": "Debugging",
+      "description": "Print statements and debugging",
+      "patterns": ["python_print"]
+    },
+    "conditionals": {
+      "name": "Conditionals",
+      "description": "If statements and conditional logic",
+      "patterns": ["python_if_statement", "python_if_else"]
+    },
+    "loops": {
+      "name": "Loops",
+      "description": "For and while loops",
+      "patterns": ["python_for_loop"]
+    },
+    "comprehensions": {
+      "name": "Comprehensions",
+      "description": "List and dict comprehensions",
+      "patterns": ["python_list_comprehension"]
+    }
+  }
+}

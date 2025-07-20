@@ -236,6 +236,36 @@ impl ToolService {
                     })).unwrap()),
                     annotations: None,
                 },
+                Tool {
+                    name: "validate_pattern".into(),
+                    description: Some("Validate AST patterns with intelligent learning hints and insights. Provides dynamic error messages that help LLMs understand pattern syntax and offers guided learning suggestions for pattern improvement.".into()),
+                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "pattern": { "type": "string", "description": "AST pattern to validate (e.g., 'console.log($VAR)')" },
+                            "language": { "type": "string", "description": "Programming language for pattern validation" },
+                            "test_code": { "type": "string", "description": "Optional code sample to test the pattern against" },
+                            "context": { "type": "string", "description": "Optional context or intended use case for the pattern" }
+                        },
+                        "required": ["pattern", "language"]
+                    })).unwrap()),
+                    annotations: None,
+                },
+                Tool {
+                    name: "explore_patterns".into(),
+                    description: Some("Explore and discover available AST patterns from the learning catalog. Browse patterns by language, category, or complexity level. Provides curated learning paths and pattern examples for educational progression.".into()),
+                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "language": { "type": "string", "description": "Filter patterns by programming language (e.g., 'javascript', 'rust', 'python')" },
+                            "category": { "type": "string", "description": "Filter patterns by category (e.g., 'functions', 'variables', 'loops')" },
+                            "complexity": { "type": "string", "enum": ["beginner", "intermediate", "advanced"], "description": "Filter patterns by complexity level" },
+                            "search": { "type": "string", "description": "Search patterns by keyword in pattern text, description, or tags" },
+                            "limit": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20, "description": "Maximum number of patterns to return" }
+                        }
+                    })).unwrap()),
+                    annotations: None,
+                },
             ],
             ..Default::default()
         }

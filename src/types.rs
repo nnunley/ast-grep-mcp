@@ -335,7 +335,9 @@ pub struct CursorResult {
 ///     pattern: "var $VAR = $VAL;".to_string(),
 ///     replacement: "let $VAR = $VAL;".to_string(),
 ///     language: "javascript".to_string(),
-///     ..Default::default()
+///     strictness: None,
+///     selector: None,
+///     context: None,
 /// };
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]

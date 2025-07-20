@@ -67,6 +67,10 @@ impl ToolRouter {
             "generate_ast" => Self::handle_generate_ast(service, request).await,
             "list_languages" => Self::handle_list_languages(service, request).await,
 
+            // Learning operations
+            "validate_pattern" => Self::handle_validate_pattern(service, request).await,
+            "explore_patterns" => Self::handle_explore_patterns(service, request).await,
+
             _ => Err(ErrorData::method_not_found::<
                 rmcp::model::CallToolRequestMethod,
             >()),
@@ -304,5 +308,42 @@ impl ToolRouter {
             .await
             .map_err(ErrorData::from)?;
         Self::create_json_response(result)
+    }
+
+    // Learning operations
+    async fn handle_validate_pattern(
+        service: &AstGrepService,
+        request: CallToolRequestParam,
+    ) -> Result<CallToolResult, ErrorData> {
+        let param: crate::learning::ValidatePatternParam = Self::parse_params(&request)?;
+        let result = service
+            .validate_pattern(param)
+            .await
+            .map_err(ErrorData::from)?;
+        let summary = format!(
+            "Pattern validation {}. Complexity: {:.2}, Compatible languages: {}",
+            if result.is_valid { "passed" } else { "failed" },
+            result.analysis.complexity_score,
+            result.analysis.language_compatibility.join(", ")
+        );
+        Self::create_formatted_response(&result, summary)
+    }
+
+    async fn handle_explore_patterns(
+        service: &AstGrepService,
+        request: CallToolRequestParam,
+    ) -> Result<CallToolResult, ErrorData> {
+        let param: crate::learning::ExplorePatternParam = Self::parse_params(&request)?;
+        let result = service
+            .explore_patterns(param)
+            .await
+            .map_err(ErrorData::from)?;
+        let summary = format!(
+            "Found {} patterns (of {} total available). Learning path has {} steps",
+            result.patterns.len(),
+            result.total_available,
+            result.learning_path.len()
+        );
+        Self::create_formatted_response(&result, summary)
     }
 }

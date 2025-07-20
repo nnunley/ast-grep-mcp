@@ -56,6 +56,7 @@ pub mod config;
 pub mod context_lines;
 pub mod errors;
 pub mod language_injection;
+pub mod learning;
 pub mod path_validation;
 pub mod pattern;
 pub mod replace;
@@ -74,3 +75,9 @@ mod test_context_integration;
 // Re-export commonly used types
 pub use rules::types::*;
 pub use types::*;
+
+// Re-export learning types for external use
+pub use learning::{
+    DiscoveryService, ExplorePatternParam, LearningService, PatternCatalog, ValidatePatternParam,
+    ValidationEngine, ValidationResult,
+};

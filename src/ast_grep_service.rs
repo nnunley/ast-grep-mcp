@@ -1,6 +1,10 @@
 use crate::ast_utils::AstParser;
 use crate::config::ServiceConfig;
 use crate::errors::ServiceError;
+use crate::learning::{
+    ExplorePatternParam, GeneratePromptParam, GeneratedPrompt, LearningService, PatternCatalog,
+    ValidatePatternParam, ValidationResult,
+};
 use crate::pattern::PatternMatcher;
 use crate::replace::ReplaceService;
 use crate::response_formatter::ResponseFormatter;
@@ -48,24 +52,29 @@ const ALL_LANGUAGES: &[&str] = &[
 use rmcp::{
     ServerHandler,
     model::{
-        CallToolRequestParam, CallToolResult, ErrorData, Implementation, InitializeResult,
-        ListToolsResult, PaginatedRequestParam, ProtocolVersion, ServerCapabilities,
+        CallToolRequestParam, CallToolResult, ErrorData, GetPromptRequestParam, GetPromptResult,
+        Implementation, InitializeResult, ListPromptsResult, ListToolsResult,
+        PaginatedRequestParam, Prompt, PromptArgument, PromptMessage, PromptMessageContent,
+        PromptMessageRole, PromptsCapability, ProtocolVersion, ServerCapabilities,
     },
     service::{RequestContext, RoleServer},
 };
 // Removed unused serde imports
-use sha2::{Digest, Sha256};
 
 #[derive(Clone)]
-#[allow(dead_code)]
 pub struct AstGrepService {
+    #[allow(dead_code)]
     pub(crate) config: ServiceConfig,
+    #[allow(dead_code)]
     pub(crate) pattern_cache: Arc<Mutex<LruCache<String, Pattern>>>,
+    #[allow(dead_code)]
     pub(crate) pattern_matcher: PatternMatcher,
+    #[allow(dead_code)]
     pub(crate) rule_evaluator: RuleEvaluator,
     pub(crate) search_service: SearchService,
     pub(crate) replace_service: ReplaceService,
     pub(crate) rule_service: RuleService,
+    pub(crate) learning_service: LearningService,
 }
 
 impl Default for AstGrepService {
@@ -153,6 +162,10 @@ impl AstGrepService {
         );
         let rule_storage = RuleStorage::with_directories(config.all_rule_directories());
         let rule_service = RuleService::new(config.clone(), rule_evaluator.clone(), rule_storage);
+        let learning_service = LearningService::new().unwrap_or_else(|_| {
+            // If learning service fails to initialize, create a minimal one
+            LearningService::default()
+        });
 
         Self {
             config,
@@ -162,44 +175,11 @@ impl AstGrepService {
             search_service,
             replace_service,
             rule_service,
+            learning_service,
         }
-    }
-
-    #[allow(dead_code)]
-    fn calculate_file_hash(content: &str) -> String {
-        let mut hasher = Sha256::new();
-        hasher.update(content.as_bytes());
-        format!("sha256:{}", hex::encode(hasher.finalize()))
-    }
-
-    #[allow(dead_code)]
-    fn get_or_create_pattern(
-        &self,
-        pattern_str: &str,
-        lang: Language,
-    ) -> Result<Pattern, ServiceError> {
-        let cache_key = format!("{}:{}", lang as u8, pattern_str);
-
-        // First try to get from cache
-        if let Ok(mut cache) = self.pattern_cache.lock()
-            && let Some(pattern) = cache.get(&cache_key)
-        {
-            return Ok(pattern.clone());
-        }
-
-        // Pattern not in cache, create it
-        let pattern = Pattern::new(pattern_str, lang);
-
-        // Try to add to cache (ignore if lock fails)
-        if let Ok(mut cache) = self.pattern_cache.lock() {
-            cache.put(cache_key, pattern.clone());
-        }
-
-        Ok(pattern)
     }
 
     /// Get pattern cache statistics for monitoring and debugging
-    #[allow(dead_code)]
     pub fn get_cache_stats(&self) -> (usize, usize) {
         if let Ok(cache) = self.pattern_cache.lock() {
             (cache.len(), cache.cap().get())
@@ -289,53 +269,6 @@ impl AstGrepService {
             Some(PatternSpec::Advanced { context, .. }) => Some(context.clone()),
             None => None,
         }
-    }
-
-    #[allow(dead_code)]
-    fn is_simple_pattern_rule(&self, rule: &RuleObject) -> bool {
-        // Check if this is a simple pattern rule that we can handle directly
-        rule.pattern.is_some()
-            && rule.kind.is_none()
-            && rule.regex.is_none()
-            && rule.inside.is_none()
-            && rule.has.is_none()
-            && rule.follows.is_none()
-            && rule.precedes.is_none()
-            && rule.all.is_none()
-            && rule.any.is_none()
-            && rule.not.is_none()
-            && rule.matches.is_none()
-    }
-
-    #[allow(dead_code)]
-    fn extract_all_patterns_from_composite_rule(&self, rule: &RuleObject) -> Vec<String> {
-        let mut patterns = Vec::new();
-
-        // Handle direct pattern
-        if let Some(pattern) = self.extract_pattern_from_rule(rule) {
-            patterns.push(pattern);
-        }
-
-        // Handle "all" composite rule
-        if let Some(all_rules) = &rule.all {
-            for sub_rule in all_rules {
-                patterns.extend(self.extract_all_patterns_from_composite_rule(sub_rule));
-            }
-        }
-
-        // Handle "any" composite rule
-        if let Some(any_rules) = &rule.any {
-            for sub_rule in any_rules {
-                patterns.extend(self.extract_all_patterns_from_composite_rule(sub_rule));
-            }
-        }
-
-        // Handle "not" composite rule
-        if let Some(not_rule) = &rule.not {
-            patterns.extend(self.extract_all_patterns_from_composite_rule(not_rule));
-        }
-
-        patterns
     }
 
     #[tracing::instrument(skip(self), fields(language = %param.language, pattern = %param.pattern))]
@@ -500,6 +433,42 @@ impl AstGrepService {
     pub async fn get_rule(&self, param: GetRuleParam) -> Result<GetRuleResult, ServiceError> {
         self.rule_service.storage().get_rule(param).await
     }
+
+    /// Validate a pattern with learning insights
+    #[tracing::instrument(skip(self), fields(pattern = %param.pattern, language = %param.language))]
+    pub async fn validate_pattern(
+        &self,
+        param: ValidatePatternParam,
+    ) -> Result<ValidationResult, ServiceError> {
+        self.learning_service.validate_pattern(param).await
+    }
+
+    /// Explore available patterns in catalog
+    #[tracing::instrument(skip(self))]
+    pub async fn explore_patterns(
+        &self,
+        param: ExplorePatternParam,
+    ) -> Result<PatternCatalog, ServiceError> {
+        self.learning_service.explore_patterns(param).await
+    }
+
+    /// Generate LLM prompt for enhanced learning assistance
+    pub fn generate_prompt(
+        &self,
+        param: GeneratePromptParam,
+    ) -> Result<GeneratedPrompt, ServiceError> {
+        self.learning_service.generate_prompt(param)
+    }
+
+    /// Generate quick hint for validation results
+    pub fn generate_quick_hint(
+        &self,
+        validation_result: &ValidationResult,
+        pattern: &str,
+    ) -> String {
+        self.learning_service
+            .generate_quick_hint(validation_result, pattern)
+    }
 }
 
 impl ServerHandler for AstGrepService {
@@ -512,6 +481,7 @@ impl ServerHandler for AstGrepService {
             },
             capabilities: ServerCapabilities {
                 tools: Some(rmcp::model::ToolsCapability { list_changed: Some(true) }),
+                prompts: Some(PromptsCapability { list_changed: Some(true) }),
                 ..Default::default()
             },
             instructions: Some("AST-Grep MCP Server: Structural code search and transformation using Tree-sitter AST patterns. Supports 20+ languages including JavaScript, TypeScript, Python, Rust, Java, Go. IMPORTANT: Use $VAR for single node captures, and $ for multiple node (list) captures. When searching/replacing, use 'search' or 'replace' for code snippets (requires 'code' parameter). Use 'file_search' or 'file_replace' for operations across files (requires 'path_pattern' parameter). For bulk changes, ALWAYS use 'file_replace' with 'dry_run: true' first to preview changes. For complex logic, use rule-based tools ('rule_search', 'rule_replace', 'validate_rule') with YAML configurations. Refer to TOOL_USAGE_GUIDE.md for comprehensive examples and advanced usage.".to_string()),
@@ -542,6 +512,92 @@ impl ServerHandler for AstGrepService {
         match request.name.as_ref() {
             "list_languages" => self.handle_list_languages_tool(request).await,
             _ => ToolRouter::route_tool_call(self, request).await,
+        }
+    }
+
+    async fn list_prompts(
+        &self,
+        _request: Option<PaginatedRequestParam>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListPromptsResult, ErrorData> {
+        Ok(ListPromptsResult {
+            prompts: vec![
+                Prompt {
+                    name: "pattern_help".to_string(),
+                    description: Some("Get help with AST pattern matching for a specific use case".to_string()),
+                    arguments: Some(vec![
+                        PromptArgument {
+                            name: "use_case".to_string(),
+                            description: Some("What you want to achieve (e.g., 'find all console.log statements')".to_string()),
+                            required: Some(true),
+                        },
+                        PromptArgument {
+                            name: "language".to_string(),
+                            description: Some("Programming language (javascript, python, rust, etc.)".to_string()),
+                            required: Some(true),
+                        },
+                        PromptArgument {
+                            name: "complexity".to_string(),
+                            description: Some("beginner, intermediate, or advanced".to_string()),
+                            required: Some(false),
+                        },
+                    ]),
+                },
+                Prompt {
+                    name: "pattern_debug".to_string(),
+                    description: Some("Debug why an AST pattern isn't matching as expected".to_string()),
+                    arguments: Some(vec![
+                        PromptArgument {
+                            name: "pattern".to_string(),
+                            description: Some("The AST pattern that isn't working".to_string()),
+                            required: Some(true),
+                        },
+                        PromptArgument {
+                            name: "test_code".to_string(),
+                            description: Some("Code you expected the pattern to match".to_string()),
+                            required: Some(true),
+                        },
+                        PromptArgument {
+                            name: "language".to_string(),
+                            description: Some("Programming language".to_string()),
+                            required: Some(true),
+                        },
+                    ]),
+                },
+                Prompt {
+                    name: "pattern_optimize".to_string(),
+                    description: Some("Get suggestions for optimizing an AST pattern".to_string()),
+                    arguments: Some(vec![
+                        PromptArgument {
+                            name: "pattern".to_string(),
+                            description: Some("The AST pattern to optimize".to_string()),
+                            required: Some(true),
+                        },
+                        PromptArgument {
+                            name: "goal".to_string(),
+                            description: Some("What you want to improve (performance, readability, flexibility)".to_string()),
+                            required: Some(false),
+                        },
+                    ]),
+                },
+            ],
+            ..Default::default()
+        })
+    }
+
+    async fn get_prompt(
+        &self,
+        request: GetPromptRequestParam,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<GetPromptResult, ErrorData> {
+        match request.name.as_str() {
+            "pattern_help" => self.get_pattern_help_prompt(request.arguments),
+            "pattern_debug" => self.get_pattern_debug_prompt(request.arguments),
+            "pattern_optimize" => self.get_pattern_optimize_prompt(request.arguments),
+            _ => Err(ErrorData::invalid_params(
+                std::borrow::Cow::Borrowed("Unknown prompt name"),
+                None,
+            )),
         }
     }
 }
@@ -584,6 +640,299 @@ impl AstGrepService {
         let summary = ResponseFormatter::format_list_languages_result(&result);
         ResponseFormatter::create_formatted_response(&result, summary)
             .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
+    }
+
+    /// Get pattern help prompt
+    fn get_pattern_help_prompt(
+        &self,
+        arguments: Option<serde_json::Map<String, serde_json::Value>>,
+    ) -> Result<GetPromptResult, ErrorData> {
+        let args = arguments
+            .ok_or_else(|| ErrorData::invalid_params(Cow::Borrowed("Missing arguments"), None))?;
+
+        let use_case = args
+            .get("use_case")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ErrorData::invalid_params(Cow::Borrowed("Missing use_case"), None))?;
+
+        let language = args
+            .get("language")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ErrorData::invalid_params(Cow::Borrowed("Missing language"), None))?;
+
+        let complexity = args
+            .get("complexity")
+            .and_then(|v| v.as_str())
+            .unwrap_or("intermediate");
+
+        // Use the learning system to generate helpful content
+        let prompt_content = format!(
+            "I'll help you create an AST pattern for: {use_case}\n\n\
+             Language: {language}\n\
+             Complexity Level: {complexity}\n\n\
+             Here are some pattern examples and guidance:\n\n\
+             1. Basic pattern structure:\n\
+             - Use exact text for literal matching\n\
+             - Use $VAR to capture single nodes\n\
+             - Use $$$ to capture multiple nodes (lists)\n\n\
+             2. Common patterns for {language}:\n"
+        );
+
+        // Add language-specific examples
+        let examples = match language {
+            "javascript" | "typescript" => {
+                "- Function calls: `functionName($ARG)`\n\
+                 - Variable declarations: `const $VAR = $VALUE`\n\
+                 - Console logs: `console.log($MSG)`\n\
+                 - Async functions: `async function $NAME($PARAMS) { $$$ }`"
+            }
+            "python" => {
+                "- Function definitions: `def $NAME($PARAMS): $$$`\n\
+                 - Method calls: `$OBJ.$METHOD($ARGS)`\n\
+                 - Print statements: `print($MSG)`\n\
+                 - Class definitions: `class $NAME: $$$`"
+            }
+            "rust" => {
+                "- Function definitions: `fn $NAME($PARAMS) -> $RET { $$$ }`\n\
+                 - Match expressions: `match $EXPR { $$$ }`\n\
+                 - Macro calls: `$MACRO!($ARGS)`\n\
+                 - Impl blocks: `impl $TRAIT for $TYPE { $$$ }`"
+            }
+            _ => {
+                "- Function/method patterns vary by language\n\
+                 - Check the AST structure with generate_ast tool\n\
+                 - Start simple and add complexity gradually"
+            }
+        };
+
+        let full_prompt = format!(
+            "{prompt_content}{examples}\n\n\
+             3. Next steps:\n\
+             - Use the `validate_pattern` tool to test your pattern\n\
+             - Use `explore_patterns` to see more examples\n\
+             - Use `generate_ast` to understand the AST structure\n\n\
+             Based on your use case '{use_case}', here's a suggested starting pattern:\n"
+        );
+
+        // Generate a suggested pattern based on the use case
+        let suggested_pattern = self.suggest_pattern_for_use_case(use_case, language);
+
+        Ok(GetPromptResult {
+            description: Some(format!("Pattern help for: {use_case}")),
+            messages: vec![PromptMessage {
+                role: PromptMessageRole::Assistant,
+                content: PromptMessageContent::Text {
+                    text: format!("{full_prompt}\n```\n{suggested_pattern}\n```"),
+                },
+            }],
+        })
+    }
+
+    /// Get pattern debug prompt
+    fn get_pattern_debug_prompt(
+        &self,
+        arguments: Option<serde_json::Map<String, serde_json::Value>>,
+    ) -> Result<GetPromptResult, ErrorData> {
+        let args = arguments
+            .ok_or_else(|| ErrorData::invalid_params(Cow::Borrowed("Missing arguments"), None))?;
+
+        let pattern = args
+            .get("pattern")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ErrorData::invalid_params(Cow::Borrowed("Missing pattern"), None))?;
+
+        let test_code = args
+            .get("test_code")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ErrorData::invalid_params(Cow::Borrowed("Missing test_code"), None))?;
+
+        let language = args
+            .get("language")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ErrorData::invalid_params(Cow::Borrowed("Missing language"), None))?;
+
+        // Use the validation engine to analyze the pattern
+        let validation_param = crate::learning::ValidatePatternParam {
+            pattern: pattern.to_string(),
+            language: language.to_string(),
+            test_code: Some(test_code.to_string()),
+            context: None,
+        };
+
+        // Run validation synchronously
+        let validation_result = tokio::task::block_in_place(|| {
+            let rt = tokio::runtime::Handle::current();
+            rt.block_on(self.learning_service.validate_pattern(validation_param))
+        });
+
+        let debug_content = match validation_result {
+            Ok(result) => {
+                let hint = self.learning_service.generate_quick_hint(&result, pattern);
+                format!(
+                    "Pattern Debug Analysis:\n\n\
+                     Pattern: `{}`\n\
+                     Test Code:\n```{}\n{}\n```\n\n\
+                     {}\n\n\
+                     Analysis:\n\
+                     - Valid: {}\n\
+                     - Complexity: {:.2}\n\
+                     - Metavariables: {}\n\n\
+                     {}",
+                    pattern,
+                    language,
+                    test_code,
+                    hint,
+                    result.is_valid,
+                    result.analysis.complexity_score,
+                    result.analysis.metavar_usage.len(),
+                    if result.is_valid {
+                        "✅ Pattern matches successfully!\n\nTry these experiments:\n".to_string()
+                            + &result.suggested_experiments.join("\n- ")
+                    } else {
+                        format!(
+                            "❌ Pattern doesn't match. Issues:\n{}\n\nSuggestions:\n{}",
+                            result.analysis.potential_issues.join("\n- "),
+                            result
+                                .learning_insights
+                                .iter()
+                                .map(|i| format!("- {}", i.actionable_tip))
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        )
+                    }
+                )
+            }
+            Err(e) => format!("Error analyzing pattern: {e}"),
+        };
+
+        Ok(GetPromptResult {
+            description: Some(format!("Debug analysis for pattern: {pattern}")),
+            messages: vec![PromptMessage {
+                role: PromptMessageRole::Assistant,
+                content: PromptMessageContent::Text {
+                    text: debug_content,
+                },
+            }],
+        })
+    }
+
+    /// Get pattern optimize prompt
+    fn get_pattern_optimize_prompt(
+        &self,
+        arguments: Option<serde_json::Map<String, serde_json::Value>>,
+    ) -> Result<GetPromptResult, ErrorData> {
+        let args = arguments
+            .ok_or_else(|| ErrorData::invalid_params(Cow::Borrowed("Missing arguments"), None))?;
+
+        let pattern = args
+            .get("pattern")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ErrorData::invalid_params(Cow::Borrowed("Missing pattern"), None))?;
+
+        let goal = args
+            .get("goal")
+            .and_then(|v| v.as_str())
+            .unwrap_or("general");
+
+        let optimize_content = format!(
+            "Pattern Optimization Analysis:\n\n\
+             Original Pattern: `{pattern}`\n\
+             Optimization Goal: {goal}\n\n"
+        );
+
+        let suggestions = match goal {
+            "performance" => {
+                "Performance Optimization:\n\
+                 - Use specific literals instead of generic metavariables where possible\n\
+                 - Avoid $$$ captures unless necessary (they're more expensive)\n\
+                 - Consider using selector constraints for better filtering\n\
+                 - Break complex patterns into simpler, targeted ones"
+            }
+            "readability" => {
+                "Readability Improvements:\n\
+                 - Use descriptive metavariable names ($FUNCTION_NAME vs $F)\n\
+                 - Break complex patterns into multiple simpler patterns\n\
+                 - Add comments explaining the pattern's purpose\n\
+                 - Consider using YAML rules for complex logic"
+            }
+            "flexibility" => {
+                "Flexibility Enhancements:\n\
+                 - Replace literals with metavariables for more matches\n\
+                 - Use $$$ for capturing variable-length lists\n\
+                 - Consider optional elements with pattern alternatives\n\
+                 - Use context patterns for surrounding code flexibility"
+            }
+            _ => {
+                "General Optimization Tips:\n\
+                 - Balance specificity with flexibility\n\
+                 - Use metavariables strategically\n\
+                 - Consider maintenance and future changes\n\
+                 - Test with diverse code samples"
+            }
+        };
+
+        let optimized_pattern = self.suggest_optimized_pattern(pattern, goal);
+
+        Ok(GetPromptResult {
+            description: Some(format!("Optimization suggestions for: {pattern}")),
+            messages: vec![PromptMessage {
+                role: PromptMessageRole::Assistant,
+                content: PromptMessageContent::Text {
+                    text: format!(
+                        "{optimize_content}{suggestions}\n\n\
+                         Suggested Optimized Pattern:\n```\n{optimized_pattern}\n```\n\n\
+                         Additional Tips:\n\
+                         - Use `validate_pattern` to test the optimized version\n\
+                         - Compare match results between original and optimized\n\
+                         - Consider the trade-offs for your specific use case"
+                    ),
+                },
+            }],
+        })
+    }
+
+    /// Suggest a pattern based on use case description
+    fn suggest_pattern_for_use_case(&self, use_case: &str, language: &str) -> String {
+        let use_case_lower = use_case.to_lowercase();
+
+        match language {
+            "javascript" | "typescript" if use_case_lower.contains("console.log") => {
+                "console.log($MESSAGE)"
+            }
+            "javascript" | "typescript" if use_case_lower.contains("function") => {
+                "function $NAME($PARAMS) { $$$ }"
+            }
+            "python" if use_case_lower.contains("print") => "print($MESSAGE)",
+            "python" if use_case_lower.contains("function") || use_case_lower.contains("def") => {
+                "def $NAME($PARAMS):\n    $$$"
+            }
+            "rust" if use_case_lower.contains("function") => "fn $NAME($PARAMS) -> $RET { $$$ }",
+            _ => "$PATTERN",
+        }
+        .to_string()
+    }
+
+    /// Suggest an optimized version of a pattern
+    fn suggest_optimized_pattern(&self, pattern: &str, goal: &str) -> String {
+        match goal {
+            "performance" if pattern.contains("$$$") => pattern.replace("$$$", "$SPECIFIC_NODE"),
+            "readability" => {
+                // Make metavariable names more descriptive
+                pattern
+                    .replace("$VAR", "$VARIABLE_NAME")
+                    .replace("$ARG", "$ARGUMENT")
+                    .replace("$MSG", "$MESSAGE")
+            }
+            "flexibility" => {
+                // Add more metavariables
+                if !pattern.contains("$") {
+                    format!("$FLEXIBLE_{pattern}")
+                } else {
+                    pattern.to_string()
+                }
+            }
+            _ => pattern.to_string(),
+        }
     }
 }
 
