@@ -1,4 +1,4 @@
-use super::{CatalogManager, RuleEvaluator, RuleStorage};
+use super::{RuleEvaluator, RuleStorage};
 use crate::config::ServiceConfig;
 
 #[derive(Clone)]
@@ -7,21 +7,14 @@ pub struct RuleService {
     config: ServiceConfig,
     evaluator: RuleEvaluator,
     storage: RuleStorage,
-    catalog: CatalogManager,
 }
 
 impl RuleService {
-    pub fn new(
-        config: ServiceConfig,
-        evaluator: RuleEvaluator,
-        storage: RuleStorage,
-        catalog: CatalogManager,
-    ) -> Self {
+    pub fn new(config: ServiceConfig, evaluator: RuleEvaluator, storage: RuleStorage) -> Self {
         Self {
             config,
             evaluator,
             storage,
-            catalog,
         }
     }
 
@@ -31,9 +24,5 @@ impl RuleService {
 
     pub fn storage(&self) -> &RuleStorage {
         &self.storage
-    }
-
-    pub fn catalog(&self) -> &CatalogManager {
-        &self.catalog
     }
 }

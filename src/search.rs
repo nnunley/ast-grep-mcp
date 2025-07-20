@@ -1,16 +1,12 @@
 use crate::config::ServiceConfig;
-use crate::context_lines::add_context_to_search_result;
-use crate::embedded::EmbeddedService;
 use crate::errors::ServiceError;
-use crate::language_injection::LanguageInjection;
 use crate::path_validation::validate_path_pattern;
 use crate::pattern::PatternMatcher;
-use crate::rules::{RuleEvaluator, RuleSearchParam, ast::Rule, parse_rule_config};
+use crate::rules::{RuleEvaluator, RuleSearchParam, parse_rule_config};
 use crate::types::*;
 
 use ast_grep_language::SupportLang as Language;
 use globset::{Glob, GlobSetBuilder};
-use sha2::{Digest, Sha256};
 use std::str::FromStr;
 use walkdir::WalkDir;
 
@@ -19,7 +15,6 @@ pub struct SearchService {
     config: ServiceConfig,
     pattern_matcher: PatternMatcher,
     rule_evaluator: RuleEvaluator,
-    embedded_service: EmbeddedService,
 }
 
 impl SearchService {
@@ -28,230 +23,37 @@ impl SearchService {
         pattern_matcher: PatternMatcher,
         rule_evaluator: RuleEvaluator,
     ) -> Self {
-        let embedded_service = EmbeddedService::new(pattern_matcher.clone());
         Self {
             config,
             pattern_matcher,
             rule_evaluator,
-            embedded_service,
         }
     }
 
-    /// Process a single file for search matches
-    #[allow(clippy::too_many_arguments)]
-    fn process_file_search(
+    /// Discovers and filters files based on a path pattern, size limits, and pagination cursor.
+    /// Returns a tuple of (filtered_file_paths, next_cursor, total_files_found).
+    async fn find_and_filter_files(
         &self,
-        file_path: &str,
-        file_size: u64,
-        pattern: &str,
-        lang: Language,
-        selector: Option<&str>,
-        context: Option<&str>,
+        path_pattern: &str,
         max_file_size: u64,
-        context_before: Option<usize>,
-        context_after: Option<usize>,
-        context_lines: Option<usize>,
-    ) -> Option<FileMatchResult> {
-        // Skip files that are too large
-        if file_size > max_file_size {
-            return None;
-        }
-
-        // Read file and search for matches
-        std::fs::read_to_string(file_path).ok().and_then(|content| {
-            // Check if we should use language injection
-            let matches = if let Some(injection_config) =
-                LanguageInjection::should_use_injection(Some(file_path), &lang.to_string())
-            {
-                // Use embedded language search
-                let param = EmbeddedSearchParam {
-                    code: content.clone(),
-                    pattern: pattern.to_string(),
-                    embedded_config: injection_config.embedded_config,
-                    strictness: None,
-                };
-
-                // Use blocking task to run async embedded search
-                let embedded_service = self.embedded_service.clone();
-                let matches = std::thread::spawn(move || {
-                    let rt = tokio::runtime::Runtime::new().unwrap();
-                    rt.block_on(embedded_service.search_embedded_native(param))
-                })
-                .join()
-                .unwrap()
-                .ok()?;
-
-                // Convert embedded matches to regular matches
-                matches
-                    .matches
-                    .into_iter()
-                    .map(|em| MatchResult {
-                        text: em.text,
-                        start_line: em.start_line,
-                        start_col: em.start_col,
-                        end_line: em.end_line,
-                        end_col: em.end_col,
-                        vars: em.vars,
-                        context_before: None,
-                        context_after: None,
-                    })
-                    .collect()
-            } else {
-                // Use regular search
-                self.pattern_matcher
-                    .search_with_options(&content, pattern, lang, selector, context)
-                    .ok()?
-            };
-
-            if matches.is_empty() {
-                None
-            } else {
-                let mut final_matches = matches;
-
-                // Add context lines if requested
-                if context_before.is_some() || context_after.is_some() || context_lines.is_some() {
-                    final_matches = crate::context_lines::extract_context_lines(
-                        &content,
-                        &final_matches,
-                        context_before,
-                        context_after,
-                        context_lines,
-                    );
-                }
-
-                let file_hash = format!("{:x}", Sha256::digest(content.as_bytes()));
-                Some(FileMatchResult {
-                    file_path: file_path.to_string(),
-                    file_size_bytes: file_size,
-                    matches: final_matches,
-                    file_hash,
-                })
-            }
-        })
-    }
-
-    /// Validate that a file path is under one of the configured root directories
-    fn validate_file_under_roots(&self, file_path: &str) -> Result<(), ServiceError> {
-        let path = std::path::Path::new(file_path);
-        let canonical_path = path
-            .canonicalize()
-            .map_err(|e| ServiceError::Internal(format!("Failed to canonicalize path: {e}")))?;
-
-        for root_dir in &self.config.root_directories {
-            if let Ok(canonical_root) = std::path::Path::new(root_dir).canonicalize() {
-                if canonical_path.starts_with(&canonical_root) {
-                    return Ok(());
-                }
-            }
-        }
-
-        Err(ServiceError::Internal(
-            "File path is not under any configured root directory".to_string(),
-        ))
-    }
-
-    pub async fn search(&self, param: SearchParam) -> Result<SearchResult, ServiceError> {
-        let lang = Language::from_str(&param.language)
-            .map_err(|_| ServiceError::Internal("Failed to parse language".to_string()))?;
-
-        // For string search, we can't auto-detect file type, so check if code looks like HTML
-        let matches = if param.code.contains("<script") || param.code.contains("<style") {
-            // Might be HTML with embedded code
-            if let Some(injection_config) =
-                LanguageInjection::should_use_injection(None, &param.language)
-            {
-                // Use embedded search
-                let embedded_param = EmbeddedSearchParam {
-                    code: param.code.clone(),
-                    pattern: param.pattern.clone(),
-                    embedded_config: injection_config.embedded_config,
-                    strictness: param.strictness,
-                };
-
-                let result = self
-                    .embedded_service
-                    .search_embedded_native(embedded_param)
-                    .await?;
-
-                // Convert embedded matches to regular matches
-                result
-                    .matches
-                    .into_iter()
-                    .map(|em| MatchResult {
-                        text: em.text,
-                        start_line: em.start_line,
-                        start_col: em.start_col,
-                        end_line: em.end_line,
-                        end_col: em.end_col,
-                        vars: em.vars,
-                        context_before: None,
-                        context_after: None,
-                    })
-                    .collect()
-            } else {
-                self.pattern_matcher.search_with_options(
-                    &param.code,
-                    &param.pattern,
-                    lang,
-                    param.selector.as_deref(),
-                    param.context.as_deref(),
-                )?
-            }
-        } else {
-            self.pattern_matcher.search_with_options(
-                &param.code,
-                &param.pattern,
-                lang,
-                param.selector.as_deref(),
-                param.context.as_deref(),
-            )?
-        };
-
-        let mut result = SearchResult {
-            matches,
-            matches_summary: None,
-        };
-
-        // Add context lines if requested
-        if param.context_before.is_some()
-            || param.context_after.is_some()
-            || param.context_lines.is_some()
-        {
-            result = add_context_to_search_result(
-                &param.code,
-                result,
-                param.context_before,
-                param.context_after,
-                param.context_lines,
-            );
-        }
-
-        Ok(result)
-    }
-
-    pub async fn file_search(
-        &self,
-        param: FileSearchParam,
-    ) -> Result<FileSearchResult, ServiceError> {
+        max_results: usize,
+        cursor: Option<CursorParam>,
+    ) -> Result<(Vec<(String, u64)>, Option<CursorResult>, usize), ServiceError> {
         // Early return if cursor indicates completion
-        if let Some(ref cursor) = param.cursor {
-            if cursor.is_complete {
-                return Ok(FileSearchResult {
-                    matches: vec![],
-                    next_cursor: Some(CursorResult {
+        if let Some(ref c) = cursor {
+            if c.is_complete {
+                return Ok((
+                    vec![],
+                    Some(CursorResult {
                         last_file_path: String::new(),
                         is_complete: true,
                     }),
-                    total_files_found: 0,
-                });
+                    0,
+                ));
             }
         }
 
-        let lang = Language::from_str(&param.language)
-            .map_err(|_| ServiceError::Internal("Failed to parse language".to_string()))?;
-
-        // Validate the path pattern for security
-        let validated_pattern = validate_path_pattern(&param.path_pattern)?;
+        let validated_pattern = validate_path_pattern(path_pattern)?;
 
         // Check if this is a direct file path (not a glob pattern)
         let path = std::path::Path::new(&validated_pattern);
@@ -264,33 +66,19 @@ impl SearchService {
                 ServiceError::Internal(format!("Failed to read file metadata: {e}"))
             })?;
 
-            // Process the single file
-            let file_result = self.process_file_search(
-                &validated_pattern,
-                metadata.len(),
-                &param.pattern,
-                lang,
-                param.selector.as_deref(),
-                param.context.as_deref(),
-                param.max_file_size,
-                param.context_before,
-                param.context_after,
-                param.context_lines,
-            );
-
-            let (matches, total_files) = match file_result {
-                Some(result) => (vec![result], 1),
-                None => (vec![], 0),
+            let file_paths = if metadata.len() <= max_file_size {
+                vec![(validated_pattern.clone(), metadata.len())]
+            } else {
+                vec![]
             };
 
-            return Ok(FileSearchResult {
-                matches,
-                next_cursor: Some(CursorResult {
-                    last_file_path: validated_pattern.clone(),
-                    is_complete: true,
-                }),
-                total_files_found: total_files,
+            let total_files = file_paths.len();
+            let next_cursor = Some(CursorResult {
+                last_file_path: validated_pattern.clone(),
+                is_complete: true,
             });
+
+            return Ok((file_paths, next_cursor, total_files));
         }
 
         let glob = Glob::new(&validated_pattern)
@@ -303,141 +91,8 @@ impl SearchService {
 
         let glob_set = std::sync::Arc::new(glob_set);
 
-        // Collect all potential files first
-        let all_files: Vec<(String, u64)> = self
-            .config
-            .root_directories
-            .iter()
-            .flat_map(|root_dir| {
-                let root_dir_clone = root_dir.clone();
-                let pattern_clone = validated_pattern.clone();
-                let glob_set_clone = glob_set.clone();
-                WalkDir::new(root_dir)
-                    .max_depth(10)
-                    .into_iter()
-                    .filter_map(|e| e.ok())
-                    .filter(|e| e.file_type().is_file())
-                    .filter_map(move |entry| {
-                        let path = entry.path();
-                        let path_str = path.to_string_lossy().to_string();
-
-                        // For relative patterns, check against relative path
-                        let matches =
-                            if pattern_clone.starts_with("**") || pattern_clone.contains('/') {
-                                // Try matching against relative path from root
-                                if let Ok(rel_path) = path.strip_prefix(&root_dir_clone) {
-                                    glob_set_clone.is_match(rel_path.to_string_lossy().as_ref())
-                                } else {
-                                    glob_set_clone.is_match(&path_str)
-                                }
-                            } else {
-                                // For simple patterns like "*.js", match against filename
-                                if let Some(file_name) = path.file_name() {
-                                    glob_set_clone.is_match(file_name.to_string_lossy().as_ref())
-                                } else {
-                                    false
-                                }
-                            };
-
-                        if !matches {
-                            return None;
-                        }
-
-                        // Check file size
-                        entry
-                            .metadata()
-                            .ok()
-                            .filter(|m| m.len() <= param.max_file_size)
-                            .map(|m| (path_str, m.len()))
-                    })
-            })
-            .collect();
-
-        // Sort files for consistent pagination
-        let mut sorted_files = all_files;
-        sorted_files.sort_by(|a, b| a.0.cmp(&b.0));
-
-        // Apply cursor filtering and process files
-        let cursor_filter = param.cursor.as_ref().map(|c| c.last_file_path.clone());
-
-        let file_results: Vec<FileMatchResult> = sorted_files
-            .into_iter()
-            .filter(|(path, _)| cursor_filter.as_ref().is_none_or(|start| path > start))
-            .filter_map(|(path_str, file_size)| {
-                self.process_file_search(
-                    &path_str,
-                    file_size,
-                    &param.pattern,
-                    lang,
-                    param.selector.as_deref(),
-                    param.context.as_deref(),
-                    param.max_file_size,
-                    param.context_before,
-                    param.context_after,
-                    param.context_lines,
-                )
-            })
-            .take(param.max_results)
-            .collect();
-
-        let total_files_found = file_results.len();
-        let is_complete = file_results.len() < param.max_results;
-        let last_path = file_results
-            .last()
-            .map(|r| r.file_path.clone())
-            .unwrap_or_default();
-
-        Ok(FileSearchResult {
-            matches: file_results,
-            next_cursor: Some(CursorResult {
-                last_file_path: if is_complete {
-                    String::new()
-                } else {
-                    last_path
-                },
-                is_complete,
-            }),
-            total_files_found,
-        })
-    }
-
-    pub async fn rule_search(
-        &self,
-        param: RuleSearchParam,
-    ) -> Result<FileSearchResult, ServiceError> {
-        // Check if cursor indicates completion
-        if let Some(ref cursor) = param.cursor {
-            if cursor.is_complete {
-                return Ok(FileSearchResult {
-                    matches: vec![],
-                    next_cursor: Some(CursorResult {
-                        last_file_path: String::new(),
-                        is_complete: true,
-                    }),
-                    total_files_found: 0,
-                });
-            }
-        }
-
-        let rule = parse_rule_config(&param.rule_config)?;
-        let lang = Language::from_str(&rule.language)
-            .map_err(|_| ServiceError::Internal("Failed to parse language".to_string()))?;
-
-        // Use path pattern or default to all files
-        let path_pattern = param.path_pattern.unwrap_or_else(|| "**/*".to_string());
-
-        // Validate the path pattern for security
-        let validated_pattern = validate_path_pattern(&path_pattern)?;
-
-        let mut file_results = Vec::new();
-        let mut total_files_found = 0;
-        let mut files_processed = 0;
-
-        // Determine starting point for pagination
-        let start_after = param.cursor.as_ref().map(|c| c.last_file_path.clone());
-
         // Determine search roots and pattern
-        let (search_roots, glob_pattern) = if validated_pattern.starts_with('/') {
+        let (search_roots, effective_glob_pattern) = if validated_pattern.starts_with('/') {
             // Absolute path pattern - check if it's within any root
             let mut found_root = None;
             let mut relative_pattern = None;
@@ -514,94 +169,260 @@ impl SearchService {
             )
         };
 
-        let glob = Glob::new(&glob_pattern)
-            .map_err(|e| ServiceError::Internal(format!("Invalid glob pattern: {e}")))?;
-        let mut glob_builder = GlobSetBuilder::new();
-        glob_builder.add(glob);
-        let glob_set = glob_builder
-            .build()
-            .map_err(|e| ServiceError::Internal(format!("Failed to build glob set: {e}")))?;
+        // Collect all potential files first
+        let all_files: Vec<(String, u64)> = search_roots
+            .iter()
+            .flat_map(|root_dir| {
+                let root_dir_clone = root_dir.clone();
+                let pattern_clone = effective_glob_pattern.clone();
+                let glob_set_clone = glob_set.clone();
+                WalkDir::new(root_dir)
+                    .max_depth(10)
+                    .into_iter()
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.file_type().is_file())
+                    .filter_map(move |entry| {
+                        let path = entry.path();
+                        let path_str = path.to_string_lossy().to_string();
 
-        for root_dir in &search_roots {
-            for entry in WalkDir::new(root_dir)
-                .max_depth(10)
-                .into_iter()
-                .filter_map(|e| e.ok())
-                .filter(|e| e.file_type().is_file())
-            {
-                let path = entry.path();
-                let path_str = path.to_string_lossy();
+                        // For relative patterns, check against relative path
+                        let matches =
+                            if pattern_clone.starts_with("**") || pattern_clone.contains('/') {
+                                // Try matching against relative path from root
+                                if let Ok(rel_path) = path.strip_prefix(&root_dir_clone) {
+                                    glob_set_clone.is_match(rel_path.to_string_lossy().as_ref())
+                                } else {
+                                    glob_set_clone.is_match(&path_str)
+                                }
+                            } else {
+                                // For simple patterns like "*.js", match against filename
+                                if let Some(file_name) = path.file_name() {
+                                    glob_set_clone.is_match(file_name.to_string_lossy().as_ref())
+                                } else {
+                                    false
+                                }
+                            };
 
-                // Skip until we reach the cursor position
-                if let Some(ref start_path) = start_after {
-                    if path_str.as_ref() <= start_path.as_str() {
-                        continue;
-                    }
-                }
-
-                // Check if path matches the glob pattern
-                let matches = if let Ok(rel_path) = path.strip_prefix(root_dir) {
-                    glob_set.is_match(rel_path.to_string_lossy().as_ref())
-                } else {
-                    glob_set.is_match(path_str.as_ref())
-                };
-
-                if matches {
-                    // Check file size
-                    if let Ok(metadata) = entry.metadata() {
-                        if metadata.len() > param.max_file_size {
-                            continue;
+                        if !matches {
+                            return None;
                         }
-                    }
 
-                    // Read and search file
-                    if let Ok(content) = std::fs::read_to_string(path) {
-                        // Convert RuleObject to Rule enum and use new evaluation
-                        let rule_enum = Rule::from(rule.rule.clone());
-                        let matches = self
-                            .rule_evaluator
-                            .evaluate_rule(&rule_enum, &content, lang)?;
+                        // Check file size
+                        entry
+                            .metadata()
+                            .ok()
+                            .filter(|m| m.len() <= max_file_size)
+                            .map(|m| (path_str, m.len()))
+                    })
+            })
+            .collect();
 
-                        if !matches.is_empty() {
-                            total_files_found += 1;
-                            let file_hash = format!("{:x}", Sha256::digest(content.as_bytes()));
+        // Sort files for consistent pagination
+        let mut sorted_files = all_files;
+        sorted_files.sort_by(|a, b| a.0.cmp(&b.0));
 
-                            file_results.push(FileMatchResult {
-                                file_path: path_str.to_string(),
-                                file_size_bytes: content.len() as u64,
-                                matches,
-                                file_hash,
-                            });
+        // Apply cursor filtering and max_results limit
+        let cursor_filter = cursor.as_ref().map(|c| c.last_file_path.clone());
+        let mut paginated_files = Vec::new();
+        let mut files_processed_count = 0;
 
-                            files_processed += 1;
-
-                            // Check if we've reached the limit
-                            if files_processed >= param.max_results {
-                                let next_cursor = Some(CursorResult {
-                                    last_file_path: path_str.to_string(),
-                                    is_complete: false,
-                                });
-
-                                return Ok(FileSearchResult {
-                                    matches: file_results,
-                                    next_cursor,
-                                    total_files_found,
-                                });
-                            }
-                        }
-                    }
+        for (path_str, file_size) in sorted_files.into_iter() {
+            if let Some(ref start_path) = cursor_filter {
+                if path_str.as_str() <= start_path.as_str() {
+                    continue;
                 }
+            }
+
+            if files_processed_count >= max_results {
+                // We've reached the limit for this page, set cursor for next page
+                let next_cursor = Some(CursorResult {
+                    last_file_path: path_str,
+                    is_complete: false,
+                });
+                let files_count = paginated_files.len();
+                return Ok((paginated_files, next_cursor, files_count));
+            }
+
+            paginated_files.push((path_str, file_size));
+            files_processed_count += 1;
+        }
+
+        // If we reached here, all matching files have been processed
+        let files_count = paginated_files.len();
+        Ok((
+            paginated_files,
+            Some(CursorResult {
+                last_file_path: String::new(),
+                is_complete: true,
+            }),
+            files_count,
+        ))
+    }
+
+    pub async fn search(&self, param: SearchParam) -> Result<SearchResult, ServiceError> {
+        let lang = Language::from_str(&param.language)
+            .map_err(|_| ServiceError::Internal("Failed to parse language".to_string()))?;
+
+        // Regular search
+        let matches = self.pattern_matcher.search_with_options(
+            &param.code,
+            &param.pattern,
+            lang,
+            param.selector.as_deref(),
+            param.context.as_deref(),
+        )?;
+
+        Ok(SearchResult {
+            matches,
+            matches_summary: None,
+        })
+    }
+
+    pub async fn file_search(
+        &self,
+        param: FileSearchParam,
+    ) -> Result<FileSearchResult, ServiceError> {
+        // Early return if cursor indicates completion
+        if let Some(ref cursor) = param.cursor {
+            if cursor.is_complete {
+                return Ok(FileSearchResult {
+                    matches: vec![],
+                    next_cursor: Some(CursorResult {
+                        last_file_path: String::new(),
+                        is_complete: true,
+                    }),
+                    total_files_found: 0,
+                });
+            }
+        }
+
+        let lang = Language::from_str(&param.language)
+            .map_err(|_| ServiceError::Internal("Failed to parse language".to_string()))?;
+
+        let path_pattern = &param.path_pattern;
+        let mut file_results = Vec::new();
+
+        let (file_paths, next_cursor, total_files_found) = self
+            .find_and_filter_files(
+                path_pattern,
+                param.max_file_size,
+                param.max_results,
+                param.cursor,
+            )
+            .await?;
+
+        for (file_path, _) in file_paths {
+            let content = match std::fs::read_to_string(&file_path) {
+                Ok(content) => content,
+                Err(_) => continue,
+            };
+
+            // Regular search
+            let matches = self.pattern_matcher.search_with_options(
+                &content,
+                &param.pattern,
+                lang,
+                param.selector.as_deref(),
+                param.context.as_deref(),
+            )?;
+
+            if !matches.is_empty() {
+                file_results.push(FileMatchResult {
+                    file_path: file_path.clone(),
+                    file_size_bytes: content.len() as u64,
+                    matches,
+                    file_hash: String::new(),
+                });
             }
         }
 
         Ok(FileSearchResult {
             matches: file_results,
-            next_cursor: Some(CursorResult {
-                last_file_path: String::new(),
-                is_complete: true,
-            }),
+            next_cursor,
             total_files_found,
         })
+    }
+
+    pub async fn rule_search(
+        &self,
+        param: RuleSearchParam,
+    ) -> Result<FileSearchResult, ServiceError> {
+        // Check if cursor indicates completion
+        if let Some(ref cursor) = param.cursor {
+            if cursor.is_complete {
+                return Ok(FileSearchResult {
+                    matches: vec![],
+                    next_cursor: Some(CursorResult {
+                        last_file_path: String::new(),
+                        is_complete: true,
+                    }),
+                    total_files_found: 0,
+                });
+            }
+        }
+
+        let rule = parse_rule_config(&param.rule_config)?;
+        let lang = Language::from_str(&rule.language)
+            .map_err(|_| ServiceError::Internal("Failed to parse language".to_string()))?;
+
+        let path_pattern = param.path_pattern.as_deref().unwrap_or("**/*");
+        let mut file_results = Vec::new();
+
+        let (file_paths, next_cursor, total_files_found) = self
+            .find_and_filter_files(
+                path_pattern,
+                param.max_file_size,
+                param.max_results,
+                param.cursor,
+            )
+            .await?;
+
+        for (file_path, _) in file_paths {
+            let content = match std::fs::read_to_string(&file_path) {
+                Ok(content) => content,
+                Err(_) => continue,
+            };
+
+            // TODO: Check if file language matches
+
+            let matches = self
+                .rule_evaluator
+                .evaluate_rule_against_code(&rule.rule, &content, lang)?;
+
+            if !matches.is_empty() {
+                file_results.push(FileMatchResult {
+                    file_path: file_path.clone(),
+                    file_size_bytes: content.len() as u64,
+                    matches,
+                    file_hash: String::new(),
+                });
+            }
+        }
+
+        Ok(FileSearchResult {
+            matches: file_results,
+            next_cursor,
+            total_files_found,
+        })
+    }
+
+    fn validate_file_under_roots(&self, file_path: &str) -> Result<(), ServiceError> {
+        let path = std::path::Path::new(file_path);
+        let canonical_path = path
+            .canonicalize()
+            .map_err(|e| ServiceError::Internal(format!("Failed to canonicalize path: {e}")))?;
+
+        for root in &self.config.root_directories {
+            if let Ok(canonical_root) = root.canonicalize() {
+                if canonical_path.starts_with(&canonical_root) {
+                    return Ok(());
+                }
+            }
+        }
+
+        Err(ServiceError::Internal(
+            "File is outside allowed directories".to_string(),
+        ))
     }
 }
 

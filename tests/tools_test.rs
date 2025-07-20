@@ -16,7 +16,6 @@ fn test_list_tools() {
         "replace",
         "file_replace",
         "list_languages",
-        "documentation",
         "rule_search",
         "rule_replace",
         "validate_rule",
@@ -24,8 +23,6 @@ fn test_list_tools() {
         "list_rules",
         "get_rule",
         "delete_rule",
-        "list_catalog_rules",
-        "import_catalog_rule",
         "generate_ast",
     ];
 
@@ -42,7 +39,8 @@ fn test_search_tool_schema() {
     let search_tool = result.tools.iter().find(|t| t.name == "search").unwrap();
 
     assert_eq!(search_tool.name, "search");
-    assert!(search_tool.description.contains("ast-grep"));
+    println!("Search tool description: {:?}", search_tool.description);
+    assert!(search_tool.description.as_ref().unwrap().contains("AST"));
 
     // Verify the schema structure
     let schema = &search_tool.input_schema;
@@ -62,7 +60,7 @@ fn test_file_search_tool_schema() {
         .find(|t| t.name == "file_search")
         .unwrap();
 
-    assert!(tool.description.contains("file"));
+    assert!(tool.description.as_ref().unwrap().contains("file"));
 
     let schema = &tool.input_schema;
     let properties = &schema["properties"];
@@ -93,8 +91,8 @@ fn test_rule_search_tool_schema() {
         .find(|t| t.name == "rule_search")
         .unwrap();
 
-    assert!(tool.description.contains("rule"));
-    assert!(tool.description.contains("YAML"));
+    assert!(tool.description.as_ref().unwrap().contains("rule"));
+    assert!(tool.description.as_ref().unwrap().contains("YAML"));
 
     let schema = &tool.input_schema;
     let properties = &schema["properties"];
@@ -114,8 +112,8 @@ fn test_rule_replace_tool_schema() {
         .find(|t| t.name == "rule_replace")
         .unwrap();
 
-    assert!(tool.description.contains("replace"));
-    assert!(tool.description.contains("fix"));
+    assert!(tool.description.as_ref().unwrap().contains("replace"));
+    assert!(tool.description.as_ref().unwrap().contains("fix"));
 
     let schema = &tool.input_schema;
     let properties = &schema["properties"];
@@ -133,7 +131,7 @@ fn test_validate_rule_tool_schema() {
         .find(|t| t.name == "validate_rule")
         .unwrap();
 
-    assert!(tool.description.contains("validate"));
+    assert!(tool.description.as_ref().unwrap().contains("validate"));
 
     let schema = &tool.input_schema;
     let properties = &schema["properties"];
@@ -309,32 +307,6 @@ fn test_list_languages() {
 }
 
 #[test]
-fn test_get_documentation() {
-    let result = ToolService::get_documentation();
-
-    assert!(!result.content.is_empty());
-    assert!(result.content.contains("AST-Grep"));
-    assert!(result.content.contains("search"));
-    assert!(result.content.contains("pattern"));
-    assert!(result.content.contains("rule"));
-    assert!(result.content.contains("$VAR"));
-
-    // Check that documentation includes tool examples
-    assert!(result.content.contains("file_search"));
-    assert!(result.content.contains("rule_replace"));
-    assert!(result.content.contains("generate_ast"));
-
-    // Check that it includes pattern syntax examples
-    assert!(result.content.contains("console.log($MSG)"));
-    assert!(result.content.contains("function $NAME($ARGS)"));
-
-    // Check that it includes composite rule examples
-    assert!(result.content.contains("all:"));
-    assert!(result.content.contains("any:"));
-    assert!(result.content.contains("not:"));
-}
-
-#[test]
 fn test_file_replace_tool_detailed_schema() {
     let result = ToolService::list_tools();
     let tool = result
@@ -448,6 +420,7 @@ fn test_rule_management_tools_schemas() {
 }
 
 #[test]
+#[ignore = "Catalog tools were removed from the service"]
 fn test_catalog_tools_schemas() {
     let result = ToolService::list_tools();
 
@@ -490,9 +463,9 @@ fn test_generate_ast_tool_schema() {
         .find(|t| t.name == "generate_ast")
         .unwrap();
 
-    assert!(tool.description.contains("syntax tree"));
-    assert!(tool.description.contains("Tree-sitter"));
-    assert!(tool.description.contains("debugging"));
+    assert!(tool.description.as_ref().unwrap().contains("syntax tree"));
+    assert!(tool.description.as_ref().unwrap().contains("Tree-sitter"));
+    assert!(tool.description.as_ref().unwrap().contains("debugging"));
 
     let schema = &tool.input_schema;
     let properties = &schema["properties"];
@@ -518,17 +491,6 @@ fn test_list_languages_and_documentation_schemas() {
     assert_eq!(lang_schema["type"], "object");
     let lang_props = &lang_schema["properties"];
     assert!(lang_props.as_object().unwrap().is_empty());
-
-    // Test documentation - should have empty properties
-    let doc_tool = result
-        .tools
-        .iter()
-        .find(|t| t.name == "documentation")
-        .unwrap();
-    let doc_schema = &doc_tool.input_schema;
-    assert_eq!(doc_schema["type"], "object");
-    let doc_props = &doc_schema["properties"];
-    assert!(doc_props.as_object().unwrap().is_empty());
 }
 
 #[test]

@@ -39,7 +39,6 @@ use std::path::PathBuf;
 use tracing_subscriber::{self, filter::EnvFilter};
 
 use ast_grep_mcp::{
-    DebugAstParam, DebugFormat, DebugPatternParam, EmbeddedLanguageConfig, EmbeddedSearchParam,
     GenerateAstParam, RuleReplaceParam, RuleSearchParam, SearchParam,
     ast_grep_service::AstGrepService, config::ServiceConfig, types::*,
 };
@@ -151,27 +150,6 @@ enum Commands {
         #[arg(long, default_value = "100")]
         max_results: usize,
     },
-    /// Search for patterns in embedded languages within host languages
-    SearchEmbedded {
-        /// Pattern to search for in embedded language
-        #[arg(short, long)]
-        pattern: String,
-        /// Host language (e.g., html, python)
-        #[arg(long)]
-        host_language: String,
-        /// Embedded language (e.g., javascript, sql)
-        #[arg(long)]
-        embedded_language: String,
-        /// Pattern to extract embedded code from host language
-        #[arg(long)]
-        extraction_pattern: String,
-        /// Code to search in (use - for stdin)
-        #[arg(long)]
-        code: Option<String>,
-        /// File to search in
-        #[arg(short, long)]
-        file: Option<PathBuf>,
-    },
     /// Search files using rules
     RuleSearch {
         /// Rule file path
@@ -213,39 +191,6 @@ enum Commands {
         /// File to analyze
         #[arg(short, long)]
         file: Option<PathBuf>,
-    },
-    /// Debug ast-grep patterns to understand their structure and behavior
-    DebugPattern {
-        /// Pattern to debug
-        #[arg(short, long)]
-        pattern: String,
-        /// Programming language
-        #[arg(short, long)]
-        language: String,
-        /// Optional sample code to test pattern against
-        #[arg(long)]
-        sample_code: Option<String>,
-        /// Debug format: pattern, ast, or cst
-        #[arg(long, default_value = "pattern")]
-        format: String,
-    },
-    /// Generate enhanced AST/CST debug information with statistics
-    DebugAst {
-        /// Programming language
-        #[arg(short, long)]
-        language: String,
-        /// Code to analyze (use - for stdin)
-        #[arg(long)]
-        code: Option<String>,
-        /// File to analyze
-        #[arg(short, long)]
-        file: Option<PathBuf>,
-        /// Debug format: ast or cst
-        #[arg(long, default_value = "ast")]
-        format: String,
-        /// Include trivia (whitespace, comments) in CST format
-        #[arg(long, default_value = "true")]
-        include_trivia: bool,
     },
 }
 
@@ -382,50 +327,6 @@ async fn run_cli_command(command: Commands, config: ServiceConfig) -> Result<()>
                     match_result.end_col
                 );
                 println!("  Text: {}", match_result.text);
-            }
-        }
-
-        Commands::SearchEmbedded {
-            pattern,
-            host_language,
-            embedded_language,
-            extraction_pattern,
-            code,
-            file,
-        } => {
-            let code_content = get_code_content(code, file).await?;
-            let config = EmbeddedLanguageConfig {
-                host_language,
-                embedded_language,
-                extraction_pattern,
-                selector: None,
-                context: None,
-            };
-            let param = EmbeddedSearchParam {
-                code: code_content,
-                pattern,
-                embedded_config: config,
-                strictness: None,
-            };
-
-            let result = service.search_embedded(param).await?;
-            println!(
-                "Found {} matches in {} embedded blocks:",
-                result.matches.len(),
-                result.total_embedded_blocks
-            );
-            for (i, match_result) in result.matches.iter().enumerate() {
-                println!(
-                    "Match {}: {}:{}-{}:{} (Block {})",
-                    i + 1,
-                    match_result.start_line,
-                    match_result.start_col,
-                    match_result.end_line,
-                    match_result.end_col,
-                    match_result.embedded_block_index + 1
-                );
-                println!("  Text: {}", match_result.text);
-                println!("  Context: {}", match_result.host_context);
             }
         }
 
@@ -572,107 +473,6 @@ async fn run_cli_command(command: Commands, config: ServiceConfig) -> Result<()>
             println!("Available node kinds: {}", result.node_kinds.join(", "));
             println!("\nAST structure:");
             println!("{}", result.ast);
-        }
-        Commands::DebugPattern {
-            pattern,
-            language,
-            sample_code,
-            format,
-        } => {
-            let debug_format = match format.as_str() {
-                "pattern" => DebugFormat::Pattern,
-                "ast" => DebugFormat::Ast,
-                "cst" => DebugFormat::Cst,
-                _ => {
-                    eprintln!("Invalid format: {format}. Must be 'pattern', 'ast', or 'cst'");
-                    std::process::exit(1);
-                }
-            };
-
-            let param = DebugPatternParam {
-                pattern,
-                language,
-                sample_code,
-                format: debug_format,
-            };
-
-            let result = service.debug_pattern(param).await?;
-            println!("🔍 Pattern Debug Analysis");
-            println!("Pattern: {}", result.pattern);
-            println!("Language: {}", result.language);
-            println!("Format: {:?}\n", result.format);
-
-            println!("📊 Analysis Results:");
-            println!("{}", result.debug_info);
-
-            println!("💡 Explanation:");
-            println!("{}", result.explanation);
-
-            if let Some(ref matches) = result.sample_matches {
-                println!("\n✅ Sample Code Testing:");
-                if matches.is_empty() {
-                    println!("  No matches found in sample code");
-                } else {
-                    println!("  Found {} match(es) in sample code:", matches.len());
-                    for (i, match_result) in matches.iter().take(5).enumerate() {
-                        println!("  {}. {}", i + 1, match_result.text);
-                    }
-                    if matches.len() > 5 {
-                        println!("  ... and {} more matches", matches.len() - 5);
-                    }
-                }
-            }
-        }
-        Commands::DebugAst {
-            language,
-            code,
-            file,
-            format,
-            include_trivia,
-        } => {
-            let code_content = get_code_content(code, file).await?;
-            let debug_format = match format.as_str() {
-                "ast" => DebugFormat::Ast,
-                "cst" => DebugFormat::Cst,
-                _ => {
-                    eprintln!("Invalid format: {format}. Must be 'ast' or 'cst'");
-                    std::process::exit(1);
-                }
-            };
-
-            let param = DebugAstParam {
-                code: code_content,
-                language,
-                format: debug_format,
-                include_trivia,
-            };
-
-            let result = service.debug_ast(param).await?;
-            println!("🌳 AST Debug Analysis");
-            println!("Language: {}", result.language);
-            println!("Format: {:?}", result.format);
-            println!("Code Length: {} characters\n", result.code_length);
-
-            println!("📊 Tree Statistics:");
-            println!("  Total Nodes: {}", result.tree_stats.total_nodes);
-            println!("  Leaf Nodes: {}", result.tree_stats.leaf_nodes);
-            println!("  Max Depth: {}", result.tree_stats.max_depth);
-            println!("  Error Nodes: {}\n", result.tree_stats.error_nodes);
-
-            println!("🏷️ Node Types Found:");
-            if result.node_kinds.is_empty() {
-                println!("  No node types detected");
-            } else {
-                for (i, node_kind) in result.node_kinds.iter().take(10).enumerate() {
-                    println!("  {}. {}", i + 1, node_kind);
-                }
-                if result.node_kinds.len() > 10 {
-                    println!("  ... and {} more node types", result.node_kinds.len() - 10);
-                }
-            }
-
-            println!("\n🌲 Syntax Tree:");
-            println!("{}", result.tree);
         }
     }
 

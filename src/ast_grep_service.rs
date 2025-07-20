@@ -1,13 +1,11 @@
 use crate::ast_utils::AstParser;
 use crate::config::ServiceConfig;
-use crate::debug::DebugService;
-use crate::embedded::EmbeddedService;
 use crate::errors::ServiceError;
 use crate::pattern::PatternMatcher;
 use crate::replace::ReplaceService;
 use crate::response_formatter::ResponseFormatter;
 use crate::rules::*;
-use crate::rules::{CatalogManager, RuleEvaluator, RuleService, RuleStorage};
+use crate::rules::{RuleEvaluator, RuleService, RuleStorage};
 use crate::search::SearchService;
 use crate::tool_router::ToolRouter;
 use crate::types::*;
@@ -19,12 +17,39 @@ use std::num::NonZeroUsize;
 use std::{borrow::Cow, str::FromStr, sync::Arc, sync::Mutex};
 
 use ast_grep_language::SupportLang as Language;
+
+const ALL_LANGUAGES: &[&str] = &[
+    "bash",
+    "c",
+    "cpp",
+    "csharp",
+    "css",
+    "dart",
+    "elixir",
+    "go",
+    "haskell",
+    "html",
+    "java",
+    "javascript",
+    "json",
+    "kotlin",
+    "lua",
+    "php",
+    "python",
+    "ruby",
+    "rust",
+    "scala",
+    "swift",
+    "typescript",
+    "tsx",
+    "yaml",
+];
 // Removed unused base64 import
 use rmcp::{
     ServerHandler,
     model::{
         CallToolRequestParam, CallToolResult, ErrorData, Implementation, InitializeResult,
-        ListToolsResult, PaginatedRequestParam, ProtocolVersion, ServerCapabilities, Tool,
+        ListToolsResult, PaginatedRequestParam, ProtocolVersion, ServerCapabilities,
     },
     service::{RequestContext, RoleServer},
 };
@@ -41,8 +66,6 @@ pub struct AstGrepService {
     pub(crate) search_service: SearchService,
     pub(crate) replace_service: ReplaceService,
     pub(crate) rule_service: RuleService,
-    pub(crate) debug_service: DebugService,
-    pub(crate) embedded_service: EmbeddedService,
 }
 
 impl Default for AstGrepService {
@@ -53,8 +76,18 @@ impl Default for AstGrepService {
 
 impl AstGrepService {
     fn parse_language(&self, lang_str: &str) -> Result<Language, ServiceError> {
-        Language::from_str(lang_str)
-            .map_err(|_| ServiceError::Internal("Failed to parse language".to_string()))
+        Language::from_str(lang_str).map_err(|_| {
+            let (ast_structure, node_kinds) = self.get_ast_debug_info("", lang_str);
+            ServiceError::AstAnalysisError {
+                message: format!(
+                    "Unsupported language: '{lang_str}'. Please use one of the supported languages."
+                ),
+                code: "".to_string(), // No specific code to analyze for language error
+                language: lang_str.to_string(),
+                ast_structure,
+                node_kinds,
+            }
+        })
     }
 
     /// Extract unique Tree-sitter node kinds from the given code
@@ -76,248 +109,26 @@ impl AstGrepService {
     }
 
     /// Generate a simple metavariable pattern from code examples
-    fn generate_simple_metavariable_pattern(
-        &self,
-        examples: &[String],
-    ) -> Result<Option<PatternSuggestion>, ServiceError> {
-        if examples.len() < 2 {
-            return Ok(None);
-        }
+    ///
+    /// Helper to get AST debug info for error reporting
+    pub fn get_ast_debug_info(&self, code: &str, language_str: &str) -> (String, Vec<String>) {
+        let lang_result = Language::from_str(language_str);
+        let ast_parser = AstParser::new();
 
-        // Simple pattern matching for console.log cases
-        if examples
-            .iter()
-            .all(|code| code.starts_with("console.log(") && code.ends_with(")"))
-        {
-            // Extract the argument parts
-            let args: Vec<&str> = examples
-                .iter()
-                .map(|code| &code[12..code.len() - 1]) // Remove "console.log(" and ")"
-                .collect();
-
-            // If all arguments are different string literals, suggest metavariable
-            if args
-                .iter()
-                .all(|arg| arg.starts_with('\'') && arg.ends_with('\''))
-            {
-                return Ok(Some(PatternSuggestion {
-                    pattern: "console.log($MSG)".to_string(),
-                    confidence: 0.9,
-                    specificity: SpecificityLevel::General,
-                    explanation: "Pattern for console.log with variable message. Use selector: \"call_expression\" to match only function calls, or context: \"function $NAME() { $PATTERN }\" to match only within functions.".to_string(),
-                    matching_examples: (0..examples.len()).collect(),
-                    node_kinds: vec!["call_expression".to_string(), "string".to_string()],
-                }));
+        match lang_result {
+            Ok(lang) => {
+                let ast_string = ast_parser.generate_ast_debug_string(code, lang);
+                let node_kinds = self.extract_node_kinds(code, lang).unwrap_or_default();
+                (ast_string, node_kinds)
+            }
+            Err(_) => {
+                // If language parsing fails, return empty AST and all supported languages as kinds
+                (
+                    "Failed to parse language, cannot generate AST.".to_string(),
+                    ALL_LANGUAGES.iter().map(|&s| s.to_string()).collect(),
+                )
             }
         }
-
-        // Simple pattern matching for function declarations
-        if examples
-            .iter()
-            .all(|code| code.starts_with("function ") && code.ends_with("() {}"))
-        {
-            // Extract function names
-            let names: Vec<&str> = examples
-                .iter()
-                .map(|code| {
-                    let start = 9; // "function ".len()
-                    let end = code.find('(').unwrap();
-                    &code[start..end]
-                })
-                .collect();
-
-            // Check if all names have common prefix "get"
-            if names.iter().all(|name| name.starts_with("get")) {
-                return Ok(Some(PatternSuggestion {
-                    pattern: "function get$TYPE() {}".to_string(),
-                    confidence: 0.8,
-                    specificity: SpecificityLevel::Specific,
-                    explanation: "Pattern for getter functions. Use selector: \"function_declaration\" to match only function declarations, or context: \"class $CLASS { $PATTERN }\" to match only within classes.".to_string(),
-                    matching_examples: (0..examples.len()).collect(),
-                    node_kinds: vec!["function_declaration".to_string(), "identifier".to_string()],
-                }));
-            }
-
-            // General function pattern
-            return Ok(Some(PatternSuggestion {
-                pattern: "function $NAME() {}".to_string(),
-                confidence: 0.7,
-                specificity: SpecificityLevel::General,
-                explanation: "Pattern for function declarations. Use selector: \"function_declaration\" to match only function declarations, or context: \"class $CLASS { $PATTERN }\" to match only within classes.".to_string(),
-                matching_examples: (0..examples.len()).collect(),
-                node_kinds: vec!["function_declaration".to_string(), "identifier".to_string()],
-            }));
-        }
-
-        // Pattern matching for nested property access in if statements
-        if examples.iter().all(|code| {
-            code.contains("if (")
-                && code.contains("===")
-                && code.contains("{ return")
-                && code.contains("; }")
-        }) {
-            // Check for user.property pattern
-            if examples
-                .iter()
-                .all(|code| code.contains("user.") && code.contains("==="))
-            {
-                return Ok(Some(PatternSuggestion {
-                    pattern: "if (user.$PROP === $VALUE) { return $RESULT; }".to_string(),
-                    confidence: 0.8,
-                    specificity: SpecificityLevel::Specific,
-                    explanation: "Pattern for user property comparisons. Use selector: \"if_statement\" to match only if statements, or context: \"function $NAME() { $PATTERN }\" to match only within functions.".to_string(),
-                    matching_examples: (0..examples.len()).collect(),
-                    node_kinds: vec![
-                        "if_statement".to_string(),
-                        "member_expression".to_string(),
-                        "binary_expression".to_string(),
-                    ],
-                }));
-            }
-
-            // More general object property pattern
-            return Ok(Some(PatternSuggestion {
-                pattern: "if ($OBJ.$PROP === $VALUE) { return $RESULT; }".to_string(),
-                confidence: 0.7,
-                specificity: SpecificityLevel::General,
-                explanation: "Pattern for object property comparisons. Use selector: \"if_statement\" to match only if statements, or context: \"function $NAME() { $PATTERN }\" to match only within functions.".to_string(),
-                matching_examples: (0..examples.len()).collect(),
-                node_kinds: vec![
-                    "if_statement".to_string(),
-                    "member_expression".to_string(),
-                    "binary_expression".to_string(),
-                ],
-            }));
-        }
-
-        // Pattern matching for multiple statements with const declarations and console.log
-        if examples.iter().all(|code| {
-            code.contains("const ") && code.contains(" = ") && code.contains("console.log(")
-        }) {
-            // Check for const var = func(); console.log(var.prop); pattern
-            if examples.iter().all(|code| {
-                code.contains("const ")
-                    && code.contains(" = get")
-                    && code.contains("(); console.log(")
-            }) {
-                return Ok(Some(PatternSuggestion {
-                    pattern: "const $VAR = $FUNC(); console.log($VAR.$PROP);".to_string(),
-                    confidence: 0.8,
-                    specificity: SpecificityLevel::Specific,
-                    explanation: "Pattern for variable assignment and property access logging. Use selector: \"variable_declaration\" to match only variable declarations, or context: \"function $NAME() { $PATTERN }\" to match only within functions."
-                        .to_string(),
-                    matching_examples: (0..examples.len()).collect(),
-                    node_kinds: vec![
-                        "variable_declaration".to_string(),
-                        "call_expression".to_string(),
-                        "member_expression".to_string(),
-                    ],
-                }));
-            }
-        }
-
-        // Pattern matching for class declarations
-        if examples
-            .iter()
-            .all(|code| code.contains("class ") && code.contains("{ constructor() {} }"))
-        {
-            // Check for class Service pattern
-            if examples.iter().all(|code| code.contains("Service")) {
-                return Ok(Some(PatternSuggestion {
-                    pattern: "class $NAMEService { constructor() {} }".to_string(),
-                    confidence: 0.8,
-                    specificity: SpecificityLevel::Specific,
-                    explanation: "Pattern for service class declarations. Use selector: \"class_declaration\" to match only class declarations, or context: \"export $PATTERN\" to match only exported classes.".to_string(),
-                    matching_examples: (0..examples.len()).collect(),
-                    node_kinds: vec![
-                        "class_declaration".to_string(),
-                        "constructor_definition".to_string(),
-                    ],
-                }));
-            }
-
-            // General class pattern
-            return Ok(Some(PatternSuggestion {
-                pattern: "class $NAME { constructor() {} }".to_string(),
-                confidence: 0.7,
-                specificity: SpecificityLevel::General,
-                explanation: "Pattern for class declarations with constructor. Use selector: \"class_declaration\" to match only class declarations, or context: \"export $PATTERN\" to match only exported classes.".to_string(),
-                matching_examples: (0..examples.len()).collect(),
-                node_kinds: vec![
-                    "class_declaration".to_string(),
-                    "constructor_definition".to_string(),
-                ],
-            }));
-        }
-
-        // Pattern matching for for loops with array iteration
-        if examples.iter().all(|code| {
-            code.contains("for (let ")
-                && code.contains(" = 0; ")
-                && code.contains(".length; ")
-                && code.contains("++) {")
-        }) {
-            // Check for array iteration pattern
-            if examples
-                .iter()
-                .all(|code| code.contains("process(") || code.contains("handle("))
-            {
-                return Ok(Some(PatternSuggestion {
-                    pattern:
-                        "for (let $VAR = 0; $VAR < $ARR.length; $VAR++) { $FUNC($ARR[$VAR]); }"
-                            .to_string(),
-                    confidence: 0.8,
-                    specificity: SpecificityLevel::Specific,
-                    explanation: "Pattern for for loop array iteration with function call. Use selector: \"for_statement\" to match only for loops, or context: \"function $NAME() { $PATTERN }\" to match only within functions."
-                        .to_string(),
-                    matching_examples: (0..examples.len()).collect(),
-                    node_kinds: vec![
-                        "for_statement".to_string(),
-                        "binary_expression".to_string(),
-                        "call_expression".to_string(),
-                    ],
-                }));
-            }
-        }
-
-        // If no specific patterns matched, try to generate selector-based suggestions
-        self.generate_selector_suggestions(examples)
-    }
-
-    fn generate_selector_suggestions(
-        &self,
-        examples: &[String],
-    ) -> Result<Option<PatternSuggestion>, ServiceError> {
-        // Check if examples contain field assignments that would benefit from selector
-        if examples.iter().all(|code| {
-            code.contains(" = ") && (code.contains("class ") || code.contains("interface "))
-        }) {
-            return Ok(Some(PatternSuggestion {
-                pattern: "$VAR = $VALUE".to_string(),
-                confidence: 0.6,
-                specificity: SpecificityLevel::General,
-                explanation: "General assignment pattern. Use selector: \"field_definition\" to match only class/interface fields, or selector: \"assignment_expression\" to match only assignments, or context: \"class $CLASS { $PATTERN }\" to match only within classes.".to_string(),
-                matching_examples: (0..examples.len()).collect(),
-                node_kinds: vec!["assignment_expression".to_string(), "field_definition".to_string()],
-            }));
-        }
-
-        // Check if examples contain method calls that would benefit from selector
-        if examples
-            .iter()
-            .all(|code| code.contains("(") && code.contains(")"))
-        {
-            return Ok(Some(PatternSuggestion {
-                pattern: "$FUNC($ARGS)".to_string(),
-                confidence: 0.6,
-                specificity: SpecificityLevel::General,
-                explanation: "General function call pattern. Use selector: \"call_expression\" to match only function calls, or selector: \"method_call\" to match only method calls, or context: \"function $NAME() { $PATTERN }\" to match only within functions.".to_string(),
-                matching_examples: (0..examples.len()).collect(),
-                node_kinds: vec!["call_expression".to_string(), "method_call".to_string()],
-            }));
-        }
-
-        Ok(None)
     }
 
     pub fn new() -> Self {
@@ -341,15 +152,7 @@ impl AstGrepService {
             rule_evaluator.clone(),
         );
         let rule_storage = RuleStorage::with_directories(config.all_rule_directories());
-        let catalog_manager = CatalogManager::new();
-        let rule_service = RuleService::new(
-            config.clone(),
-            rule_evaluator.clone(),
-            rule_storage,
-            catalog_manager,
-        );
-        let debug_service = DebugService::new(pattern_matcher.clone());
-        let embedded_service = EmbeddedService::new(pattern_matcher.clone());
+        let rule_service = RuleService::new(config.clone(), rule_evaluator.clone(), rule_storage);
 
         Self {
             config,
@@ -359,8 +162,6 @@ impl AstGrepService {
             search_service,
             replace_service,
             rule_service,
-            debug_service,
-            embedded_service,
         }
     }
 
@@ -428,19 +229,6 @@ impl AstGrepService {
         })
     }
 
-    /// Debug a pattern to understand its structure and behavior.
-    pub async fn debug_pattern(
-        &self,
-        param: DebugPatternParam,
-    ) -> Result<DebugPatternResult, ServiceError> {
-        self.debug_service.debug_pattern(param).await
-    }
-
-    /// Debug AST/CST structure of code.
-    pub async fn debug_ast(&self, param: DebugAstParam) -> Result<DebugAstResult, ServiceError> {
-        self.debug_service.debug_ast(param).await
-    }
-
     fn parse_rule_config(&self, rule_config_str: &str) -> Result<RuleConfig, ServiceError> {
         // First try to parse as YAML
         if let Ok(config) = serde_yaml::from_str::<RuleConfig>(rule_config_str) {
@@ -449,7 +237,14 @@ impl AstGrepService {
 
         // If YAML fails, try JSON
         serde_json::from_str::<RuleConfig>(rule_config_str).map_err(|e| {
-            ServiceError::ParserError(format!("Failed to parse rule config as YAML or JSON: {e}"))
+            let (ast_structure, node_kinds) = self.get_ast_debug_info(rule_config_str, "yaml"); // Assuming rule config is YAML
+            ServiceError::AstAnalysisError {
+                message: format!("Failed to parse rule config as YAML or JSON: {e}"),
+                code: rule_config_str.to_string(),
+                language: "yaml".to_string(), // Or "json" if it was tried as JSON
+                ast_structure,
+                node_kinds,
+            }
         })
     }
 
@@ -459,9 +254,16 @@ impl AstGrepService {
 
         // Validate rule has at least one condition
         if !self.has_rule_condition(&config.rule) {
-            return Err(ServiceError::ParserError(
-                "Rule must have at least one condition".to_string(),
-            ));
+            let rule_str = serde_json::to_string(&config.rule).unwrap_or_else(|_| "{}".to_string());
+            let (ast_structure, node_kinds) = self.get_ast_debug_info(&rule_str, &config.language);
+            return Err(ServiceError::AstAnalysisError {
+                message: "Rule must have at least one condition (e.g., pattern, kind, regex)."
+                    .to_string(),
+                code: rule_str,
+                language: config.language.clone(),
+                ast_structure,
+                node_kinds,
+            });
         }
 
         Ok(())
@@ -543,81 +345,6 @@ impl AstGrepService {
         Ok(result)
     }
 
-    #[tracing::instrument(skip(self), fields(language = %param.language, examples_count = param.code_examples.len()))]
-    pub async fn suggest_patterns(
-        &self,
-        param: SuggestPatternsParam,
-    ) -> Result<SuggestPatternsResult, ServiceError> {
-        // Basic exact pattern matching implementation
-        if param.code_examples.is_empty() {
-            return Ok(SuggestPatternsResult {
-                suggestions: vec![],
-                language: param.language,
-                total_suggestions: 0,
-            });
-        }
-
-        let mut suggestions = Vec::new();
-
-        // For single example, create an exact pattern
-        if param.code_examples.len() == 1 {
-            let code = &param.code_examples[0];
-            suggestions.push(PatternSuggestion {
-                pattern: code.clone(),
-                confidence: 1.0,
-                specificity: SpecificityLevel::Exact,
-                explanation: "Exact match for the provided code".to_string(),
-                matching_examples: vec![0],
-                node_kinds: vec![],
-            });
-        }
-        // For multiple identical examples, create one exact pattern with high confidence
-        else if param
-            .code_examples
-            .iter()
-            .all(|code| code == &param.code_examples[0])
-        {
-            let code = &param.code_examples[0];
-            suggestions.push(PatternSuggestion {
-                pattern: code.clone(),
-                confidence: 1.0,
-                specificity: SpecificityLevel::Exact,
-                explanation: "Exact match for all identical examples".to_string(),
-                matching_examples: (0..param.code_examples.len()).collect(),
-                node_kinds: vec![],
-            });
-        }
-        // For different examples, try to generate metavariable patterns
-        else {
-            // Try multiple pattern generation strategies
-            let generated_pattern =
-                self.generate_simple_metavariable_pattern(&param.code_examples)?;
-            if let Some(pattern) = generated_pattern {
-                suggestions.push(pattern);
-            }
-
-            // If no pattern was generated, fallback to exact match for first example
-            if suggestions.is_empty() {
-                let code = &param.code_examples[0];
-                suggestions.push(PatternSuggestion {
-                    pattern: code.clone(),
-                    confidence: 0.5,
-                    specificity: SpecificityLevel::Exact,
-                    explanation: "Exact match for first example".to_string(),
-                    matching_examples: vec![0],
-                    node_kinds: vec![],
-                });
-            }
-        }
-
-        let total_suggestions = suggestions.len();
-        Ok(SuggestPatternsResult {
-            suggestions,
-            language: param.language,
-            total_suggestions,
-        })
-    }
-
     #[tracing::instrument(skip(self), fields(language = %param.language, pattern = %param.pattern, path_pattern = %param.path_pattern))]
     pub async fn file_search(
         &self,
@@ -626,17 +353,6 @@ impl AstGrepService {
         let result = self.search_service.file_search(param).await?;
         tracing::Span::current().record("total_files_found", result.total_files_found);
         tracing::Span::current().record("files_with_matches", result.matches.len());
-        Ok(result)
-    }
-
-    #[tracing::instrument(skip(self), fields(host_language = %param.embedded_config.host_language, embedded_language = %param.embedded_config.embedded_language, pattern = %param.pattern))]
-    pub async fn search_embedded(
-        &self,
-        param: EmbeddedSearchParam,
-    ) -> Result<EmbeddedSearchResult, ServiceError> {
-        let result = self.embedded_service.search_embedded(param).await?;
-        tracing::Span::current().record("total_matches", result.matches.len());
-        tracing::Span::current().record("total_blocks", result.total_embedded_blocks);
         Ok(result)
     }
 
@@ -663,729 +379,9 @@ impl AstGrepService {
         &self,
         _param: ListLanguagesParam,
     ) -> Result<ListLanguagesResult, ServiceError> {
-        // List all supported languages manually since all_languages() may not exist
-        let languages = vec![
-            "bash",
-            "c",
-            "cpp",
-            "csharp",
-            "css",
-            "dart",
-            "elixir",
-            "go",
-            "haskell",
-            "html",
-            "java",
-            "javascript",
-            "json",
-            "kotlin",
-            "lua",
-            "php",
-            "python",
-            "ruby",
-            "rust",
-            "scala",
-            "swift",
-            "typescript",
-            "tsx",
-            "yaml",
-        ]
-        .into_iter()
-        .map(|s| s.to_string())
-        .collect();
-
-        Ok(ListLanguagesResult { languages })
-    }
-
-    #[tracing::instrument(skip(self))]
-    pub async fn documentation(
-        &self,
-        _param: DocumentationParam,
-    ) -> Result<DocumentationResult, ServiceError> {
-        let docs = self.generate_documentation_content();
-        Ok(DocumentationResult {
-            content: docs.to_string(),
+        Ok(ListLanguagesResult {
+            languages: ALL_LANGUAGES.iter().map(|&s| s.to_string()).collect(),
         })
-    }
-
-    /// Generate the complete documentation content for the MCP service
-    fn generate_documentation_content(&self) -> String {
-        format!(
-            "{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}",
-            self.get_header_section(),
-            self.get_key_concepts_section(),
-            self.get_search_section(),
-            self.get_file_search_section(),
-            self.get_replace_section(),
-            self.get_file_replace_section(),
-            self.get_output_format_section(),
-            self.get_pagination_section(),
-            self.get_list_languages_section(),
-            self.get_best_practices_section(),
-            self.get_rule_operations_section(),
-            self.get_rule_management_section(),
-            self.get_project_configuration_section(),
-            self.get_discovery_and_debugging_section(),
-            self.get_error_handling_section(),
-        )
-    }
-
-    /// Get the header section of the documentation
-    fn get_header_section(&self) -> &'static str {
-        "# AST-Grep MCP Service Documentation\n\nThis service provides structural code search and transformation using ast-grep patterns and rule configurations.\n\n"
-    }
-
-    /// Get the key concepts section of the documentation
-    fn get_key_concepts_section(&self) -> &'static str {
-        "## Key Concepts\n\n**AST Patterns:** Use `$VAR` to capture single nodes, `$$$` to capture multiple statements\n**Rule Configurations:** YAML or JSON configurations for complex pattern matching and transformations\n**Languages:** Supports javascript, typescript, rust, python, java, go, and many more\n**Glob Patterns:** Use `**/*.js` for recursive search, `src/*.ts` for single directory\n\n"
-    }
-
-    /// Get the search section of the documentation
-    fn get_search_section(&self) -> &'static str {
-        r#"## search
-
-Searches for patterns in code provided as a string. Useful for quick checks or when code snippets are generated dynamically.
-
-**Parameters:**
-- `code`: The source code string to search within.
-- `pattern`: The ast-grep pattern to search for (e.g., "console.log($VAR)").
-- `language`: The programming language of the code (e.g., "javascript", "typescript", "rust").
-
-**Example Usage:**
-```json
-{
-  "tool_code": "search",
-  "tool_params": {
-    "code": "function greet() { console.log(\"Hello\"); }",
-    "pattern": "console.log($VAR)",
-    "language": "javascript"
-  }
-}
-```
-
-**More Pattern Examples:**
-```json
-// Find function declarations
-{
-  "pattern": "function $NAME($PARAMS) { $BODY }",
-  "language": "javascript"
-}
-
-// Find variable assignments
-{
-  "pattern": "const $VAR = $VALUE",
-  "language": "javascript"
-}
-
-// Find Rust function definitions
-{
-  "pattern": "fn $NAME($PARAMS) -> $RETURN_TYPE { $BODY }",
-  "language": "rust"
-}
-```
-
-"#
-    }
-
-    /// Get the file search section of the documentation
-    fn get_file_search_section(&self) -> &'static str {
-        r#"## file_search
-
-Searches for patterns within files matching a glob pattern. Ideal for analyzing existing code files on the system.
-
-**Parameters:**
-- `path_pattern`: A glob pattern for files to search within (e.g., "src/**/*.js").
-- `pattern`: The ast-grep pattern to search for.
-- `language`: The programming language of the file.
-- `max_results` (optional): Maximum number of results to return (default: 1000).
-- `max_file_size` (optional): Maximum file size to process in bytes (default: 50MB).
-- `cursor` (optional): Continuation token from previous search for pagination.
-
-**Example Usage:**
-```json
-{
-  "tool_code": "file_search",
-  "tool_params": {
-    "path_pattern": "src/**/*.rs",
-    "pattern": "fn $FN_NAME()",
-    "language": "rust"
-  }
-}
-```
-
-**Common Use Cases:**
-```json
-// Find all TODO comments
-{
-  "path_pattern": "**/*.js",
-  "pattern": "// TODO: $MESSAGE",
-  "language": "javascript"
-}
-
-// Find error handling patterns
-{
-  "path_pattern": "src/**/*.ts",
-  "pattern": "catch ($ERROR) { $BODY }",
-  "language": "typescript"
-}
-
-// Find React components
-{
-  "path_pattern": "components/**/*.jsx",
-  "pattern": "function $NAME($PROPS) { return $JSX }",
-  "language": "javascript"
-}
-
-// Find Python class definitions
-{
-  "path_pattern": "**/*.py",
-  "pattern": "class $NAME($BASE): $BODY",
-  "language": "python"
-}
-```
-
-"#
-    }
-
-    /// Get the replace section of the documentation
-    fn get_replace_section(&self) -> &'static str {
-        r#"## replace
-
-Replaces patterns in code provided as a string. Useful for in-memory code transformations.
-
-**Parameters:**
-- `code`: The source code string to modify.
-- `pattern`: The ast-grep pattern to search for.
-- `replacement`: The ast-grep replacement pattern.
-- `language`: The programming language of the code.
-
-**Example Usage:**
-```json
-{
-  "tool_code": "replace",
-  "tool_params": {
-    "code": "function oldName() { console.log(\"Hello\"); }",
-    "pattern": "function oldName()",
-    "replacement": "function newName()",
-    "language": "javascript"
-  }
-}
-```
-
-**Transformation Examples:**
-```json
-// Convert var to const
-{
-  "pattern": "var $VAR = $VALUE",
-  "replacement": "const $VAR = $VALUE",
-  "language": "javascript"
-}
-
-// Add async/await
-{
-  "pattern": "function $NAME($PARAMS) { return $BODY }",
-  "replacement": "async function $NAME($PARAMS) { return await $BODY }",
-  "language": "javascript"
-}
-
-// Convert Python print statements
-{
-  "pattern": "print $ARGS",
-  "replacement": "print($ARGS)",
-  "language": "python"
-}
-
-// Modernize Rust syntax
-{
-  "pattern": "match $EXPR { $ARMS }",
-  "replacement": "match $EXPR { $ARMS }",
-  "language": "rust"
-}
-```
-
-"#
-    }
-
-    /// Get the file replace section of the documentation
-    fn get_file_replace_section(&self) -> &'static str {
-        r#"## file_replace
-
-Replaces patterns within files matching a glob pattern. Supports bulk refactoring with optimized response formats.
-
-**Parameters:**
-- `path_pattern`: A glob pattern for files to modify (e.g., "src/**/*.js").
-- `pattern`: The ast-grep pattern to search for.
-- `replacement`: The ast-grep replacement pattern.
-- `language`: The programming language of the file.
-- `dry_run` (optional): If true (default), only show preview. If false, actually modify files.
-- `summary_only` (optional): If true, return only change counts per file (default: false).
-- `include_samples` (optional): If true with summary_only, include sample changes (default: false).
-- `max_samples` (optional): Number of sample changes per file when include_samples=true (default: 3).
-- `max_results` (optional): Maximum number of results to return (default: 1000).
-- `max_file_size` (optional): Maximum file size to process in bytes (default: 50MB).
-- `cursor` (optional): Continuation token from previous search for pagination.
-
-**IMPORTANT FOR LLMs**: Use `summary_only=true` for bulk refactoring to avoid token limits. This returns concise statistics instead of full diffs.
-
-**Bulk Refactoring Workflow for LLMs:**
-
-1. **Survey scope (use for large codebases to avoid token limits):**
-```json
-{
-  "path_pattern": "src/**/*.rs",
-  "pattern": "\"$STRING\".to_string()",
-  "replacement": "\"$STRING\"",
-  "language": "rust",
-  "summary_only": true,
-  "dry_run": true
-}
-```
-Returns: `{"files_with_changes": [["src/main.rs", 15], ["src/lib.rs", 8]], "total_changes": 23}`
-
-2. **Preview samples before applying:**
-```json
-{
-  "path_pattern": "src/**/*.rs",
-  "pattern": "\"$STRING\".to_string()",
-  "replacement": "\"$STRING\"",
-  "language": "rust",
-  "summary_only": true,
-  "include_samples": true,
-  "max_samples": 3,
-  "dry_run": true
-}
-```
-
-3. **Apply changes:**
-```json
-{
-  "path_pattern": "src/**/*.rs",
-  "pattern": "\"$STRING\".to_string()",
-  "replacement": "\"$STRING\"",
-  "language": "rust",
-  "summary_only": true,
-  "dry_run": false
-}
-```
-
-**Returns Line Diffs:**
-```json
-{
-  "file_results": [{
-    "file_path": "src/main.js",
-    "file_size_bytes": 15420,
-    "changes": [
-      {
-        "line": 15,
-        "old_text": "const x = 5;",
-        "new_text": "let x = 5;"
-      },
-      {
-        "line": 23,
-        "old_text": "const result = calculate();",
-        "new_text": "let result = calculate();"
-      }
-    ],
-    "total_changes": 2,
-    "file_hash": "sha256:abc123..."
-  }],
-  "dry_run": true
-}
-```
-
-**Batch Transformation Examples:**
-```json
-// Preview changes first
-{
-  "path_pattern": "src/**/*.ts",
-  "pattern": "fetch($URL).then($HANDLER)",
-  "replacement": "await fetch($URL).then($HANDLER)",
-  "language": "typescript",
-  "dry_run": true
-}
-
-// Then apply the changes
-{
-  "path_pattern": "src/**/*.ts",
-  "pattern": "fetch($URL).then($HANDLER)",
-  "replacement": "await fetch($URL).then($HANDLER)",
-  "language": "typescript",
-  "dry_run": false
-}
-```
-
-"#
-    }
-
-    /// Get the output format section of the documentation
-    fn get_output_format_section(&self) -> &'static str {
-        r#"**Output Format for all tools:**
-
-`search` and `file_search` return a list of matches. Each match includes:
-- `text`: The full text of the matched code snippet.
-- `vars`: A dictionary (key-value pairs) of captured variables (e.g., `$VAR`, `$FN_NAME`) and their corresponding matched text.
-
-`replace` and `file_replace` return the `rewritten_code` or `rewritten_file_content` as a string.
-
-```json
-{
-  "matches": [
-    {
-      "text": "console.log(\"Hello\")",
-      "vars": {
-        "VAR": "\"Hello\""
-      }
-    }
-  ]
-}
-```
-
-"#
-    }
-
-    /// Get the pagination section of the documentation
-    fn get_pagination_section(&self) -> &'static str {
-        r#"## Pagination
-
-`file_search` and `file_replace` support pagination for large result sets. When results are paginated:
-
-- The response includes a `next_cursor` field with a continuation token
-- Use this cursor in the `cursor` parameter of the next request
-- The `total_files_found` field shows how many files matched the glob pattern
-- When `next_cursor.is_complete` is true, no more results are available
-
-**Pagination Example:**
-```json
-{
-  "tool_code": "file_search",
-  "tool_params": {
-    "path_pattern": "src/**/*.js",
-    "pattern": "function $NAME()",
-    "language": "javascript",
-    "max_results": 10,
-    "cursor": {
-      "last_file_path": "c3JjL2NvbXBvbmVudHMvQnV0dG9uLmpz",
-      "is_complete": false
-    }
-  }
-}
-```
-
-"#
-    }
-
-    /// Get the list languages section of the documentation
-    fn get_list_languages_section(&self) -> &'static str {
-        r#"## list_languages
-
-Returns all supported programming languages.
-
-**Usage:**
-```json
-{
-  "tool_code": "list_languages",
-  "tool_params": {}
-}
-```
-
-**Supported Languages Include:**
-- **Web:** javascript, typescript, tsx, html, css
-- **Systems:** rust, c, cpp, go
-- **Enterprise:** java, csharp, kotlin, scala
-- **Scripting:** python, ruby, lua, bash
-- **Others:** swift, dart, elixir, haskell, php, yaml, json
-
-"#
-    }
-
-    /// Get the best practices section of the documentation
-    fn get_best_practices_section(&self) -> &'static str {
-        r#"## Best Practices
-
-**Pattern Writing Tips:**
-- Use specific patterns: `console.log($VAR)` vs `$ANY`
-- Capture what you need: `function $NAME($PARAMS)` captures both name and parameters
-- Test patterns with the `search` tool first before using `file_search`
-
-**Performance Tips:**
-- Use specific glob patterns: `src/components/*.tsx` vs `**/*`
-- Set reasonable `max_file_size` and `max_results` limits
-- Use pagination for large codebases
-
-**Common Patterns:**
-- Function calls: `$FUNC($ARGS)`
-- Variable declarations: `$TYPE $NAME = $VALUE`
-- Class methods: `$VISIBILITY $METHOD($PARAMS) { $BODY }`
-- Import statements: `import $NAME from '$PATH'`
-
-"#
-    }
-
-    /// Get the rule operations section of the documentation
-    fn get_rule_operations_section(&self) -> &'static str {
-        r#"## Rule-Based Operations
-
-### validate_rule
-
-Validates ast-grep rule configuration syntax and optionally tests against sample code.
-
-**Parameters:**
-- `rule_config`: YAML or JSON rule configuration string
-- `test_code` (optional): Sample code to test the rule against
-
-**Rule Configuration Format (YAML):**
-```yaml
-id: unique-rule-id
-language: javascript
-message: "Optional message for matches"
-severity: warning
-rule:
-  pattern: "console.log($ARG)"
-fix: "console.debug($ARG)"  # For rule_replace only
-```
-
-**Rule Configuration Format (JSON):**
-```json
-{
-  "id": "unique-rule-id",
-  "language": "javascript",
-  "message": "Optional message for matches",
-  "severity": "warning",
-  "rule": {
-    "pattern": "console.log($ARG)"
-  },
-  "fix": "console.debug($ARG)"
-}
-```
-
-### rule_search
-
-Search for patterns using ast-grep rule configurations. Supports complex pattern matching.
-
-**Parameters:**
-- `rule_config`: YAML or JSON rule configuration
-- `path_pattern` (optional): Glob pattern for files to search (default: all files)
-- `max_results` (optional): Maximum number of results
-- `max_file_size` (optional): Maximum file size to process
-- `cursor` (optional): Pagination cursor
-
-**Supported Rule Types:**
-- **Simple Pattern Rules**: `pattern: "console.log($ARG)"`
-- **Composite Rules**: `all`, `any`, `not` (limited support)
-- **Relational Rules**: `inside`, `has`, `follows`, `precedes` (planned)
-
-### rule_replace
-
-Replace patterns using ast-grep rule configurations with fix transformations.
-
-**Parameters:**
-- `rule_config`: YAML or JSON rule configuration with `fix` field
-- `path_pattern` (optional): Glob pattern for files to modify
-- `dry_run` (optional): If true (default), only show preview
-- `summary_only` (optional): If true, return only summary statistics
-- `max_results` (optional): Maximum number of results
-- `cursor` (optional): Pagination cursor
-
-**Example Rule with Fix:**
-```yaml
-id: modernize-var-to-const
-language: javascript
-message: "Replace var with const for immutable variables"
-severity: info
-rule:
-  pattern: "var $NAME = $VALUE"
-fix: "const $NAME = $VALUE"
-```
-
-"#
-    }
-
-    /// Get the rule management section of the documentation
-    fn get_rule_management_section(&self) -> &'static str {
-        r#"## Rule Management for LLMs
-
-The service provides comprehensive rule management capabilities allowing LLMs to create, store, and reuse custom rule configurations.
-
-### create_rule
-
-Create and store a new ast-grep rule configuration for reuse. LLMs can build custom rule libraries.
-
-**Parameters:**
-- `rule_config`: YAML or JSON rule configuration to create
-- `overwrite` (optional): Whether to overwrite existing rule with same ID (default: false)
-
-**Usage:**
-```json
-{
-  "rule_config": "id: my-custom-rule\nlanguage: typescript\nmessage: \"Custom rule\"\nrule:\n  pattern: \"$VAR as any\"\nfix: \"$VAR as unknown\"",
-  "overwrite": false
-}
-```
-
-### list_rules
-
-List all stored rule configurations with optional filtering.
-
-**Parameters:**
-- `language` (optional): Filter rules by programming language
-- `severity` (optional): Filter rules by severity level (info, warning, error)
-
-**Returns:** Array of rule information including ID, language, message, severity, file path, and whether it has a fix.
-
-### get_rule
-
-Retrieve a specific stored rule configuration by ID.
-
-**Parameters:**
-- `rule_id`: ID of the rule to retrieve
-
-**Returns:** Full rule configuration as YAML string and file path.
-
-### delete_rule
-
-Delete a stored rule configuration by ID.
-
-**Parameters:**
-- `rule_id`: ID of the rule to delete
-
-**Returns:** Confirmation of deletion with rule ID and file path.
-
-**Rule Storage:**
-- Rules are stored as YAML files in `.ast-grep-rules/` directory
-- Each rule is saved as `{rule-id}.yaml`
-- Directory is created automatically when first rule is saved
-- Rules persist between server restarts
-
-**LLM Workflow Example:**
-1. Create a custom rule: `create_rule` with your pattern and fix
-2. Test the rule: `validate_rule` with sample code
-3. Apply the rule: `rule_search` or `rule_replace` using the stored rule ID
-4. Manage rules: `list_rules`, `get_rule`, `delete_rule` as needed
-
-"#
-    }
-
-    /// Get the project configuration section of the documentation
-    fn get_project_configuration_section(&self) -> &'static str {
-        r#"## Project Configuration (sgconfig.yml)
-
-The service supports ast-grep's `sgconfig.yml` configuration files for project-wide rule management.
-
-**Automatic Discovery:**
-- Searches for `sgconfig.yml` in current directory and parent directories
-- Loads rule directories specified in the configuration
-- Makes all rules from configured directories available automatically
-
-**Configuration Format:**
-```yaml
-ruleDirs:
-  - ./rules              # Project-specific rules
-  - ./team-rules         # Shared team rules
-  - ./node_modules/@company/ast-grep-rules  # NPM package rules
-testConfigs:
-  - testDir: ./rule-tests
-    includeTestId:
-      - test-id-1
-utilDirs:
-  - ./utils              # Shared utilities
-```
-
-**Rule Directory Loading:**
-- All `.yaml` and `.yml` files in configured directories are loaded as rules
-- Subdirectories are searched recursively
-- Duplicate rule IDs emit warnings (first rule wins)
-- Rules from sgconfig.yml are merged with default `.ast-grep-rules/` directory
-
-**Duplicate Rule Handling:**
-- Each rule ID should be unique across all directories
-- When duplicates are found:
-  - Only the first rule encountered is used
-  - A warning is emitted to stderr showing both file paths
-  - This ensures predictable rule application
-
-**Example Project Setup:**
-```
-myproject/
-├── sgconfig.yml          # Project configuration
-├── rules/                # Project rules directory
-│   ├── security/        # Organized by category
-│   │   └── no-eval.yaml
-│   └── style/
-│       └── naming.yaml
-└── .ast-grep-rules/     # Default rules directory
-    └── custom-rule.yaml
-```
-
-"#
-    }
-
-    /// Get the discovery and debugging section of the documentation
-    fn get_discovery_and_debugging_section(&self) -> &'static str {
-        r#"## Discovery and Debugging Tools
-
-### generate_ast
-
-Generate a stringified syntax tree for code using Tree-sitter. Useful for debugging patterns and understanding AST structure. **Critical for LLM users to discover available Tree-sitter node kinds for Kind rules.**
-
-**Parameters:**
-- `code`: Source code to parse
-- `language`: Programming language of the code
-
-**Returns:**
-- `ast`: Stringified syntax tree showing the AST structure
-- `language`: Programming language used
-- `code_length`: Length of the input code in characters
-- `node_kinds`: Array of unique Tree-sitter node kinds found in the code
-
-**Example Usage:**
-```json
-{
-  "tool_code": "generate_ast",
-  "tool_params": {
-    "code": "function test() { return 42; }",
-    "language": "javascript"
-  }
-}
-```
-
-**Response includes node kinds like:**
-- `function_declaration`
-- `identifier`
-- `statement_block`
-- `return_statement`
-- `number`
-
-**Using node kinds in Kind rules:**
-```yaml
-rule:
-  kind: function_declaration  # Use any node kind from generate_ast
-```
-
-### list_languages
-
-Lists all supported programming languages for ast-grep patterns.
-
-**No Parameters Required**
-
-**Returns:** Array of supported language identifiers (javascript, typescript, rust, python, etc.)
-
-"#
-    }
-
-    /// Get the error handling section of the documentation
-    fn get_error_handling_section(&self) -> &'static str {
-        r#"## Error Handling
-
-The service returns structured errors for:
-- Invalid glob patterns
-- Unsupported languages
-- File access issues
-- Pattern syntax errors
-- Rule configuration parsing errors
-- Missing fix field for replacements
-
-Always check the response for error conditions before processing results.
-"#
     }
 
     #[tracing::instrument(skip(self))]
@@ -1492,109 +488,6 @@ Always check the response for error conditions before processing results.
         self.rule_service.storage().list_rules(param).await
     }
 
-    #[tracing::instrument(skip(self))]
-    pub async fn list_catalog_rules(
-        &self,
-        param: ListCatalogRulesParam,
-    ) -> Result<ListCatalogRulesResult, ServiceError> {
-        // For now, return a static list of example rules from the ast-grep catalog
-        // In a real implementation, this would fetch from https://ast-grep.github.io/catalog/
-        let mut rules = vec![
-            CatalogRuleInfo {
-                id: "xstate-v4-to-v5".to_string(),
-                name: "XState v4 to v5 Migration".to_string(),
-                description: "Migrate XState v4 code to v5 syntax".to_string(),
-                language: "typescript".to_string(),
-                category: "migration".to_string(),
-                url: "https://ast-grep.github.io/catalog/typescript/xstate-v4-to-v5".to_string(),
-            },
-            CatalogRuleInfo {
-                id: "no-console-log".to_string(),
-                name: "No Console Log".to_string(),
-                description: "Find and remove console.log statements".to_string(),
-                language: "javascript".to_string(),
-                category: "cleanup".to_string(),
-                url: "https://ast-grep.github.io/catalog/javascript/no-console-log".to_string(),
-            },
-            CatalogRuleInfo {
-                id: "use-strict-equality".to_string(),
-                name: "Use Strict Equality".to_string(),
-                description: "Replace == with === for strict equality".to_string(),
-                language: "javascript".to_string(),
-                category: "best-practices".to_string(),
-                url: "https://ast-grep.github.io/catalog/javascript/use-strict-equality"
-                    .to_string(),
-            },
-        ];
-
-        // Filter by language if specified
-        if let Some(lang) = &param.language {
-            rules.retain(|rule| rule.language == *lang);
-        }
-
-        // Filter by category if specified
-        if let Some(cat) = &param.category {
-            rules.retain(|rule| rule.category == *cat);
-        }
-
-        Ok(ListCatalogRulesResult { rules })
-    }
-
-    #[tracing::instrument(skip(self))]
-    pub async fn import_catalog_rule(
-        &self,
-        param: ImportCatalogRuleParam,
-    ) -> Result<ImportCatalogRuleResult, ServiceError> {
-        // For now, this is a mock implementation
-        // In a real implementation, this would:
-        // 1. Fetch the rule content from the provided URL
-        // 2. Parse the YAML/JSON rule configuration
-        // 3. Store it using the create_rule method
-
-        // Extract rule ID from URL or use provided one
-        let rule_id = param.rule_id.unwrap_or_else(|| {
-            // Extract ID from URL (last segment)
-            param
-                .rule_url
-                .split('/')
-                .next_back()
-                .unwrap_or("imported-rule")
-                .to_string()
-        });
-
-        // Mock rule content - in real implementation, this would be fetched from the URL
-        let mock_rule_config = format!(
-            r#"
-id: {rule_id}
-message: "Imported rule from catalog"
-language: javascript
-severity: warning
-rule:
-  pattern: console.log($VAR)
-fix: "// TODO: Replace with proper logging: console.log($VAR)"
-"#
-        );
-
-        // Use the existing create_rule method to store the imported rule
-        let create_param = CreateRuleParam {
-            rule_config: mock_rule_config,
-            overwrite: false,
-        };
-
-        match self.create_rule(create_param).await {
-            Ok(_) => Ok(ImportCatalogRuleResult {
-                rule_id: rule_id.clone(),
-                imported: true,
-                message: format!("Successfully imported rule '{rule_id}' from catalog"),
-            }),
-            Err(e) => Ok(ImportCatalogRuleResult {
-                rule_id: rule_id.clone(),
-                imported: false,
-                message: format!("Failed to import rule: {e}"),
-            }),
-        }
-    }
-
     #[tracing::instrument(skip(self), fields(rule_id = %param.rule_id))]
     pub async fn delete_rule(
         &self,
@@ -1621,276 +514,17 @@ impl ServerHandler for AstGrepService {
                 tools: Some(rmcp::model::ToolsCapability { list_changed: Some(true) }),
                 ..Default::default()
             },
-            instructions: Some("This MCP server provides tools for structural code search and transformation using ast-grep. For bulk refactoring, use file_replace with summary_only=true to avoid token limits. Use the `documentation` tool for detailed examples.".to_string()),
+            instructions: Some("AST-Grep MCP Server: Structural code search and transformation using Tree-sitter AST patterns. Supports 20+ languages including JavaScript, TypeScript, Python, Rust, Java, Go. IMPORTANT: Use $VAR for single node captures, and $ for multiple node (list) captures. When searching/replacing, use 'search' or 'replace' for code snippets (requires 'code' parameter). Use 'file_search' or 'file_replace' for operations across files (requires 'path_pattern' parameter). For bulk changes, ALWAYS use 'file_replace' with 'dry_run: true' first to preview changes. For complex logic, use rule-based tools ('rule_search', 'rule_replace', 'validate_rule') with YAML configurations. Refer to TOOL_USAGE_GUIDE.md for comprehensive examples and advanced usage.".to_string()),
         }
     }
 
     #[tracing::instrument(skip(self, _request, _context))]
     async fn list_tools(
         &self,
-        _request: PaginatedRequestParam,
+        _request: Option<PaginatedRequestParam>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        Ok(ListToolsResult {
-            tools: vec![
-                Tool {
-                    name: Cow::Borrowed("search"),
-                    description: Cow::Borrowed("Search for AST patterns in provided code. Supports $VAR for single nodes, $$$ for multiple nodes. Returns matches with line/column positions."),
-                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({ "type": "object", "properties": { "code": { "type": "string" }, "pattern": { "type": "string" }, "language": { "type": "string" } } })).unwrap()),
-                },
-                Tool {
-                    name: Cow::Borrowed("suggest_patterns"),
-                    description: Cow::Borrowed("Generate ast-grep patterns from code examples. Analyzes examples to suggest exact, specific, and general patterns with confidence scores."),
-                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "code_examples": {
-                                "type": "array",
-                                "items": { "type": "string" },
-                                "description": "Code examples to analyze for pattern suggestions"
-                            },
-                            "language": { "type": "string", "description": "Programming language" },
-                            "max_suggestions": { "type": "integer", "minimum": 1, "maximum": 10, "description": "Maximum number of pattern suggestions to return" },
-                            "specificity_levels": {
-                                "type": "array",
-                                "items": { "type": "string", "enum": ["exact", "specific", "general"] },
-                                "description": "Specificity levels to include in suggestions"
-                            }
-                        },
-                        "required": ["code_examples", "language"]
-                    })).unwrap()),
-                },
-                Tool {
-                    name: Cow::Borrowed("file_search"),
-                    description: Cow::Borrowed("Search files matching glob patterns for AST patterns. Supports pagination, context lines, and handles large codebases efficiently."),
-                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "path_pattern": { "type": "string" },
-                            "pattern": { "type": "string" },
-                            "language": { "type": "string" },
-                            "max_results": { "type": "integer", "minimum": 1, "maximum": 50, "default": 20 },
-                            "max_file_size": { "type": "integer", "minimum": 1024, "maximum": 1073741824 },
-                            "cursor": {
-                                "type": "object",
-                                "properties": {
-                                    "last_file_path": { "type": "string" },
-                                    "is_complete": { "type": "boolean" }
-                                },
-                                "required": ["last_file_path", "is_complete"]
-                            }
-                        },
-                        "required": ["path_pattern", "pattern", "language"]
-                    })).unwrap()),
-                },
-                Tool {
-                    name: Cow::Borrowed("search_embedded"),
-                    description: Cow::Borrowed("Search for patterns in embedded languages within host languages (e.g., JavaScript in HTML, SQL in Python)."),
-                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "code": { "type": "string", "description": "Code containing embedded languages" },
-                            "pattern": { "type": "string", "description": "Pattern to search for in the embedded language" },
-                            "embedded_config": {
-                                "type": "object",
-                                "properties": {
-                                    "host_language": { "type": "string", "description": "The host language (e.g., html, python)" },
-                                    "embedded_language": { "type": "string", "description": "The embedded language (e.g., javascript, sql)" },
-                                    "extraction_pattern": { "type": "string", "description": "Pattern to match the embedded code in the host language" },
-                                    "selector": { "type": "string", "description": "Optional selector to narrow down the extraction" },
-                                    "context": { "type": "string", "description": "Optional context pattern for more precise matching" }
-                                },
-                                "required": ["host_language", "embedded_language", "extraction_pattern"]
-                            },
-                            "strictness": { "type": "string", "enum": ["cst", "smart", "ast", "relaxed", "signature"], "description": "Optional match strictness" }
-                        },
-                        "required": ["code", "pattern", "embedded_config"]
-                    })).unwrap()),
-                },
-                Tool {
-                    name: Cow::Borrowed("replace"),
-                    description: Cow::Borrowed("Replace AST patterns in provided code. Use $VAR in both pattern and replacement to preserve captured nodes. Returns modified code."),
-                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({ "type": "object", "properties": { "code": { "type": "string" }, "pattern": { "type": "string" }, "replacement": { "type": "string" }, "language": { "type": "string" } } })).unwrap()),
-                },
-                Tool {
-                    name: Cow::Borrowed("file_replace"),
-                    description: Cow::Borrowed("Replace patterns in files. Use summary_only=true for bulk refactoring to avoid token limits. Returns change counts or line diffs."),
-                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "path_pattern": { "type": "string" },
-                            "pattern": { "type": "string" },
-                            "replacement": { "type": "string" },
-                            "language": { "type": "string" },
-                            "max_results": { "type": "integer", "minimum": 1, "maximum": 10000 },
-                            "max_file_size": { "type": "integer", "minimum": 1024, "maximum": 1073741824 },
-                            "dry_run": { "type": "boolean", "default": true, "description": "If true (default), only show preview. If false, actually modify files." },
-                            "summary_only": { "type": "boolean", "default": false, "description": "If true, only return summary statistics (change counts per file)" },
-                            "include_samples": { "type": "boolean", "default": false, "description": "If true, include sample changes in the response (first few changes per file)" },
-                            "max_samples": { "type": "integer", "default": 3, "minimum": 1, "maximum": 20, "description": "Maximum number of sample changes to show per file" },
-                            "cursor": {
-                                "type": "object",
-                                "properties": {
-                                    "last_file_path": { "type": "string" },
-                                    "is_complete": { "type": "boolean" }
-                                },
-                                "required": ["last_file_path", "is_complete"]
-                            }
-                        },
-                        "required": ["path_pattern", "pattern", "replacement", "language"]
-                    })).unwrap()),
-                },
-                Tool {
-                    name: Cow::Borrowed("list_languages"),
-                    description: Cow::Borrowed("Get all supported programming languages for ast-grep patterns. Returns 20+ languages including JS, TS, Python, Rust, Java, Go, etc."),
-                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({ "type": "object", "properties": {} })).unwrap()),
-                },
-                Tool {
-                    name: Cow::Borrowed("documentation"),
-                    description: Cow::Borrowed("Get comprehensive usage guide with examples, patterns, rules, and project configuration (sgconfig.yml) information."),
-                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({ "type": "object", "properties": {} })).unwrap()),
-                },
-                Tool {
-                    name: Cow::Borrowed("rule_search"),
-                    description: Cow::Borrowed("Search for patterns using ast-grep rule configurations (YAML/JSON). Supports complex pattern matching with relational and composite rules."),
-                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "rule_config": { "type": "string", "description": "YAML or JSON rule configuration" },
-                            "path_pattern": { "type": "string", "description": "Glob pattern for files to search (optional, searches all files if not provided)" },
-                            "max_results": { "type": "integer", "minimum": 1, "maximum": 10000 },
-                            "max_file_size": { "type": "integer", "minimum": 1024, "maximum": 1073741824 },
-                            "cursor": {
-                                "type": "object",
-                                "properties": {
-                                    "last_file_path": { "type": "string" },
-                                    "is_complete": { "type": "boolean" }
-                                },
-                                "required": ["last_file_path", "is_complete"]
-                            }
-                        },
-                        "required": ["rule_config"]
-                    })).unwrap()),
-                },
-                Tool {
-                    name: Cow::Borrowed("rule_replace"),
-                    description: Cow::Borrowed("Replace patterns using ast-grep rule configurations with fix transformations. Supports complex rule-based code refactoring."),
-                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "rule_config": { "type": "string", "description": "YAML or JSON rule configuration with fix field" },
-                            "path_pattern": { "type": "string", "description": "Glob pattern for files to modify (optional, processes all files if not provided)" },
-                            "max_results": { "type": "integer", "minimum": 1, "maximum": 10000 },
-                            "max_file_size": { "type": "integer", "minimum": 1024, "maximum": 1073741824 },
-                            "dry_run": { "type": "boolean", "default": true, "description": "If true (default), only show preview. If false, actually modify files." },
-                            "summary_only": { "type": "boolean", "default": false, "description": "If true, only return summary statistics" },
-                            "cursor": {
-                                "type": "object",
-                                "properties": {
-                                    "last_file_path": { "type": "string" },
-                                    "is_complete": { "type": "boolean" }
-                                },
-                                "required": ["last_file_path", "is_complete"]
-                            }
-                        },
-                        "required": ["rule_config"]
-                    })).unwrap()),
-                },
-                Tool {
-                    name: Cow::Borrowed("validate_rule"),
-                    description: Cow::Borrowed("Validate ast-grep rule configuration syntax and optionally test against sample code."),
-                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "rule_config": { "type": "string", "description": "YAML or JSON rule configuration to validate" },
-                            "test_code": { "type": "string", "description": "Optional code sample to test the rule against" }
-                        },
-                        "required": ["rule_config"]
-                    })).unwrap()),
-                },
-                Tool {
-                    name: Cow::Borrowed("create_rule"),
-                    description: Cow::Borrowed("Create and store a new ast-grep rule configuration for reuse. LLMs can use this to build custom rule libraries."),
-                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "rule_config": { "type": "string", "description": "YAML or JSON rule configuration to create" },
-                            "overwrite": { "type": "boolean", "default": false, "description": "Whether to overwrite existing rule with same ID" }
-                        },
-                        "required": ["rule_config"]
-                    })).unwrap()),
-                },
-                Tool {
-                    name: Cow::Borrowed("list_rules"),
-                    description: Cow::Borrowed("List all stored rule configurations with optional filtering by language or severity."),
-                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "language": { "type": "string", "description": "Filter rules by programming language" },
-                            "severity": { "type": "string", "description": "Filter rules by severity level (info, warning, error)" }
-                        }
-                    })).unwrap()),
-                },
-                Tool {
-                    name: Cow::Borrowed("get_rule"),
-                    description: Cow::Borrowed("Retrieve a specific stored rule configuration by ID."),
-                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "rule_id": { "type": "string", "description": "ID of the rule to retrieve" }
-                        },
-                        "required": ["rule_id"]
-                    })).unwrap()),
-                },
-                Tool {
-                    name: Cow::Borrowed("delete_rule"),
-                    description: Cow::Borrowed("Delete a stored rule configuration by ID."),
-                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "rule_id": { "type": "string", "description": "ID of the rule to delete" }
-                        },
-                        "required": ["rule_id"]
-                    })).unwrap()),
-                },
-                Tool {
-                    name: Cow::Borrowed("list_catalog_rules"),
-                    description: Cow::Borrowed("List available rules from the ast-grep catalog with optional filtering."),
-                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "language": { "type": "string", "description": "Filter rules by programming language" },
-                            "category": { "type": "string", "description": "Filter rules by category" }
-                        }
-                    })).unwrap()),
-                },
-                Tool {
-                    name: Cow::Borrowed("import_catalog_rule"),
-                    description: Cow::Borrowed("Import a rule from the ast-grep catalog into local storage."),
-                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "rule_url": { "type": "string", "description": "URL of the catalog rule to import" },
-                            "rule_id": { "type": "string", "description": "Optional custom ID for the imported rule" }
-                        },
-                        "required": ["rule_url"]
-                    })).unwrap()),
-                },
-                Tool {
-                    name: Cow::Borrowed("generate_ast"),
-                    description: Cow::Borrowed("Generate syntax tree for code and discover Tree-sitter node kinds. Essential for writing Kind rules - shows node types like function_declaration, identifier, etc."),
-                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "code": { "type": "string", "description": "Source code to parse" },
-                            "language": { "type": "string", "description": "Programming language of the code" }
-                        },
-                        "required": ["code", "language"]
-                    })).unwrap()),
-                },
-                ],
-                ..Default::default()
-            })
+        Ok(crate::tools::ToolService::list_tools())
     }
 
     #[tracing::instrument(skip(self, request, _context), fields(tool_name = %request.name))]
@@ -1904,9 +538,8 @@ impl ServerHandler for AstGrepService {
             return self.handle_file_search_with_optimization(request).await;
         }
 
-        // Special handling for documentation and list_languages which have custom implementations
+        // Special handling for list_languages which has custom implementation
         match request.name.as_ref() {
-            "documentation" => self.handle_documentation_tool(request).await,
             "list_languages" => self.handle_list_languages_tool(request).await,
             _ => ToolRouter::route_tool_call(self, request).await,
         }
@@ -1936,21 +569,6 @@ impl AstGrepService {
             ResponseFormatter::create_formatted_response(&result, summary)
                 .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
         }
-    }
-
-    /// Helper method to handle documentation tool
-    async fn handle_documentation_tool(
-        &self,
-        request: CallToolRequestParam,
-    ) -> Result<CallToolResult, ErrorData> {
-        let param: DocumentationParam = serde_json::from_value(serde_json::Value::Object(
-            request.arguments.unwrap_or_default(),
-        ))
-        .map_err(|e| ErrorData::invalid_params(Cow::Owned(e.to_string()), None))?;
-        let result = self.documentation(param).await.map_err(ErrorData::from)?;
-        let summary = ResponseFormatter::format_documentation_result(&result);
-        ResponseFormatter::create_formatted_response(&result, summary)
-            .map_err(|e| ErrorData::internal_error(Cow::Owned(e.to_string()), None))
     }
 
     /// Helper method to handle list_languages tool
@@ -2135,18 +753,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_documentation() {
-        let service = AstGrepService::new();
-        let param = DocumentationParam {};
-
-        let result = service.documentation(param).await.unwrap();
-        assert!(result.content.contains("search"));
-        assert!(result.content.contains("file_search"));
-        assert!(result.content.contains("replace"));
-        assert!(result.content.contains("file_replace"));
-    }
-
-    #[tokio::test]
     async fn test_multiple_matches() {
         let service = AstGrepService::new();
         let param = SearchParam::new(
@@ -2286,5 +892,83 @@ mod tests {
         assert!(result.ast.contains("number"));
         assert_eq!(result.language, "javascript");
         assert_eq!(result.code_length, 30);
+    }
+
+    #[tokio::test]
+    async fn test_file_replace_console_log() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let service = AstGrepService::with_config(ServiceConfig {
+            root_directories: vec![temp_dir.path().to_path_buf()],
+            ..Default::default()
+        });
+        let file_path = temp_dir.path().join("test_file_replace.js");
+        let file_content = r#"
+function greet() {
+  console.log("Hello");
+  console.log("World");
+}
+"#;
+        tokio::fs::write(&file_path, file_content).await.unwrap();
+
+        let path_pattern = "**/test_file_replace.js".to_string();
+
+        // Dry run test
+        let dry_run_param = FileReplaceParam {
+            path_pattern: path_pattern.clone(),
+            pattern: "console.log($VAR)".to_string(),
+            replacement: "logger.debug($VAR)".to_string(),
+            language: "javascript".to_string(),
+            dry_run: true,
+            include_samples: true,
+            summary_only: true,
+            max_file_size: default_max_file_size(),
+            max_results: default_max_results_large(),
+            cursor: None,
+            strictness: None,
+            selector: None,
+            context: None,
+            max_samples: default_max_samples(),
+        };
+
+        let dry_run_result = service.file_replace(dry_run_param).await.unwrap();
+        assert_eq!(dry_run_result.files_with_changes, 1);
+        assert_eq!(dry_run_result.total_changes, 2);
+        assert!(!dry_run_result.summary_results.is_empty());
+        assert!(!dry_run_result.summary_results[0].sample_changes.is_empty());
+        assert_eq!(
+            dry_run_result.summary_results[0].sample_changes[0].new_text,
+            "logger.debug($VAR)"
+        );
+
+        // Actual replacement test
+        let replace_param = FileReplaceParam {
+            path_pattern: path_pattern.clone(),
+            pattern: "console.log($VAR)".to_string(),
+            replacement: "logger.debug($VAR)".to_string(),
+            language: "javascript".to_string(),
+            dry_run: false,
+            include_samples: true,
+            summary_only: true,
+            max_file_size: default_max_file_size(),
+            max_results: default_max_results_large(),
+            cursor: None,
+            strictness: None,
+            selector: None,
+            context: None,
+            max_samples: default_max_samples(),
+        };
+
+        let replace_result = service.file_replace(replace_param).await.unwrap();
+        assert_eq!(replace_result.files_with_changes, 1);
+        assert_eq!(replace_result.total_changes, 2);
+
+        let modified_content = tokio::fs::read_to_string(&file_path).await.unwrap();
+        assert!(modified_content.contains(r#"logger.debug("Hello")"#));
+        assert!(modified_content.contains(r#"logger.debug("World")"#));
+        assert!(!modified_content.contains(r#"console.log("Hello")"#));
+        assert!(!modified_content.contains(r#"console.log("World")"#));
+
+        // Clean up
+        temp_dir.close().unwrap();
     }
 }

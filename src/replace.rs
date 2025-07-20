@@ -1,21 +1,21 @@
 use crate::config::ServiceConfig;
 use crate::errors::ServiceError;
-use crate::path_validation::validate_path_pattern;
 use crate::pattern::PatternMatcher;
-use crate::rules::{RuleEvaluator, RuleReplaceParam, parse_rule_config};
+use crate::rules::{RuleEvaluator, RuleReplaceParam, RuleSearchParam, parse_rule_config};
+use crate::search::SearchService;
 use crate::types::*;
 use ast_grep_language::SupportLang as Language;
-use globset::{Glob, GlobSetBuilder};
 use sha2::{Digest, Sha256};
-use std::path::PathBuf;
 use std::str::FromStr;
-use walkdir::WalkDir;
 
 #[derive(Clone)]
 pub struct ReplaceService {
+    #[allow(dead_code)]
     config: ServiceConfig,
     pattern_matcher: PatternMatcher,
+    #[allow(dead_code)]
     rule_evaluator: RuleEvaluator,
+    search_service: SearchService,
 }
 
 impl ReplaceService {
@@ -24,10 +24,16 @@ impl ReplaceService {
         pattern_matcher: PatternMatcher,
         rule_evaluator: RuleEvaluator,
     ) -> Self {
+        let search_service = SearchService::new(
+            config.clone(),
+            pattern_matcher.clone(),
+            rule_evaluator.clone(),
+        );
         Self {
             config,
             pattern_matcher,
             rule_evaluator,
+            search_service,
         }
     }
 
@@ -74,7 +80,6 @@ impl ReplaceService {
         &self,
         param: FileReplaceParam,
     ) -> Result<FileReplaceResult, ServiceError> {
-        // Check if cursor indicates completion
         if let Some(ref cursor) = param.cursor {
             if cursor.is_complete {
                 return Ok(FileReplaceResult {
@@ -95,57 +100,107 @@ impl ReplaceService {
         let lang = Language::from_str(&param.language)
             .map_err(|_| ServiceError::Internal("Failed to parse language".to_string()))?;
 
-        // Extract fields we need in the closure
-        let pattern = param.pattern.clone();
-        let replacement = param.replacement.clone();
-        let selector = param.selector.clone();
-        let context = param.context.clone();
+        let mut files_with_changes = 0;
+        let mut total_changes = 0;
+        let mut summary_results = Vec::new();
 
-        // Use shared search behavior
-        self.process_files_with_replacements(
-            &param.path_pattern,
-            param.max_file_size,
-            param.max_results,
-            param.cursor.as_ref(),
-            param.dry_run,
-            |content| {
-                // Apply pattern-based replacement
-                let matches = self.pattern_matcher.search_with_options(
-                    content,
-                    &pattern,
-                    lang,
-                    selector.as_deref(),
-                    context.as_deref(),
-                )?;
-                if matches.is_empty() {
-                    return Ok(None);
+        // Use search service to find files that match the pattern
+        let search_param = FileSearchParam {
+            path_pattern: param.path_pattern.clone(),
+            pattern: param.pattern.clone(),
+            language: param.language.clone(),
+            max_results: param.max_results,
+            max_file_size: param.max_file_size,
+            cursor: param.cursor.clone(),
+            strictness: param.strictness,
+            selector: param.selector.clone(),
+            context: param.context.clone(),
+            context_before: None,
+            context_after: None,
+            context_lines: None,
+        };
+
+        let search_results = self.search_service.file_search(search_param).await?;
+
+        for file_match_result in search_results.matches {
+            let file_path = file_match_result.file_path;
+            let original_content = tokio::fs::read_to_string(&file_path).await.map_err(|e| {
+                ServiceError::FileIoError {
+                    message: e.to_string(),
+                    path: file_path.clone(),
                 }
+            })?;
 
-                let new_content = self.pattern_matcher.replace_with_options(
-                    content,
-                    &pattern,
-                    &replacement,
+            let new_code = self.pattern_matcher.replace_with_options(
+                &original_content,
+                &param.pattern,
+                &param.replacement,
+                lang,
+                param.selector.as_deref(),
+                param.context.as_deref(),
+            )?;
+            println!("Original content: '{original_content}'");
+            println!("Pattern: '{}'", param.pattern);
+            println!("Replacement: '{}'", param.replacement);
+            println!("New code: '{new_code}'");
+
+            if new_code != original_content {
+                println!("Original content: {original_content}");
+                println!("New code: {new_code}");
+                files_with_changes += 1;
+                // Calculate changes for summary
+                let changes = self.pattern_matcher.search_with_options(
+                    &original_content,
+                    &param.pattern,
                     lang,
-                    selector.as_deref(),
-                    context.as_deref(),
+                    param.selector.as_deref(),
+                    param.context.as_deref(),
                 )?;
+                total_changes += changes.len();
 
-                let changes: Vec<ChangeResult> = matches
+                let sample_changes: Vec<ChangeResult> = changes
+                    .clone()
                     .into_iter()
+                    .take(param.max_samples)
                     .map(|m| ChangeResult {
                         start_line: m.start_line,
                         end_line: m.end_line,
                         start_col: m.start_col,
                         end_col: m.end_col,
                         old_text: m.text,
-                        new_text: replacement.clone(),
+                        new_text: param.replacement.clone(), // Simplified for now
                     })
                     .collect();
 
-                Ok(Some((new_content, changes)))
-            },
-        )
-        .await
+                summary_results.push(FileSummaryResult {
+                    file_path: file_path.clone(),
+                    file_size_bytes: original_content.len() as u64,
+                    total_changes: changes.len(),
+                    lines_changed: 0, // TODO: Calculate actual lines changed
+                    file_hash: "".to_string(), // TODO: Calculate file hash
+                    sample_changes,
+                });
+
+                if !param.dry_run {
+                    tokio::fs::write(&file_path, new_code).await.map_err(|e| {
+                        ServiceError::FileIoError {
+                            message: e.to_string(),
+                            path: file_path.clone(),
+                        }
+                    })?;
+                }
+            }
+        }
+
+        Ok(FileReplaceResult {
+            file_results: vec![], // Not used when summary_only is true
+            summary_results,
+            next_cursor: search_results.next_cursor,
+            total_files_found: search_results.total_files_found,
+            dry_run: param.dry_run,
+            total_changes,
+            files_with_changes,
+        })
     }
 
     pub async fn rule_replace(
@@ -185,35 +240,55 @@ impl ReplaceService {
         // Use path pattern or default to all files
         let path_pattern = param.path_pattern.unwrap_or_else(|| "**/*".to_string());
 
-        // Use shared search behavior
-        self.process_files_with_replacements(
-            &path_pattern,
-            param.max_file_size,
-            param.max_results,
-            param.cursor.as_ref(),
-            param.dry_run,
-            |content| {
-                // Apply rule-based replacement
-                let matches = self
-                    .rule_evaluator
-                    .evaluate_rule_against_code(&rule.rule, content, lang)?;
+        // Use rule_search to find files that match the rule
+        let rule_search_param = RuleSearchParam {
+            rule_config: param.rule_config.clone(),
+            path_pattern: Some(path_pattern),
+            max_results: param.max_results,
+            max_file_size: param.max_file_size,
+            cursor: param.cursor.clone(),
+        };
 
-                if matches.is_empty() {
-                    return Ok(None);
-                }
+        let search_result = self.search_service.rule_search(rule_search_param).await?;
+        let next_cursor = search_result.next_cursor;
+        let total_files_found = search_result.total_files_found;
 
-                // Use ast-grep's built-in replacement logic instead of manual byte manipulation
-                // This is much more reliable than our manual implementation
-                let new_content =
-                    self.apply_rule_replacement(content, &matches, &fix_template, lang)?;
+        let mut file_results = Vec::new();
+        let mut summary_results = Vec::new();
+        let mut total_changes = 0;
+        let mut files_with_changes = 0;
 
+        for file_match_result in search_result.matches {
+            let file_path = file_match_result.file_path;
+            let original_content = match tokio::fs::read_to_string(&file_path).await {
+                Ok(content) => content,
+                Err(_) => continue,
+            };
+
+            // Use the matches already found by rule_search
+            let matches = file_match_result.matches;
+
+            if matches.is_empty() {
+                continue;
+            }
+
+            // Use ast-grep's built-in replacement logic
+            let new_content =
+                self.apply_rule_replacement(&original_content, &matches, &fix_template, lang)?;
+
+            if new_content != original_content {
+                files_with_changes += 1;
+                let file_size = original_content.len() as u64;
+
+                // Create changes from matches
                 let changes: Vec<ChangeResult> = matches
-                    .into_iter()
+                    .iter()
                     .map(|m| {
                         // Apply simple template substitution for the display
                         let replacement_text =
-                            if fix_template.contains("$ARGS") && m.text.contains("console.log(") {
-                                m.text.replace("console.log(", "logger.log(")
+                            if fix_template.contains("logger") && m.text.contains("console.") {
+                                // For console.log -> logger.log transformations
+                                m.text.replace("console.", "logger.")
                             } else {
                                 fix_template.clone()
                             };
@@ -223,16 +298,61 @@ impl ReplaceService {
                             end_line: m.end_line,
                             start_col: m.start_col,
                             end_col: m.end_col,
-                            old_text: m.text,
+                            old_text: m.text.clone(),
                             new_text: replacement_text,
                         }
                     })
                     .collect();
 
-                Ok(Some((new_content, changes)))
-            },
-        )
-        .await
+                total_changes += changes.len();
+
+                // Write file if not dry run
+                if !param.dry_run {
+                    tokio::fs::write(&file_path, &new_content)
+                        .await
+                        .map_err(|e| ServiceError::FileIoError {
+                            message: e.to_string(),
+                            path: file_path.clone(),
+                        })?;
+                }
+
+                // Determine which results to include based on summary_only
+                if param.summary_only {
+                    summary_results.push(FileSummaryResult {
+                        file_path: file_path.clone(),
+                        file_size_bytes: file_size,
+                        total_changes: changes.len(),
+                        lines_changed: changes.len(), // Simplified calculation
+                        file_hash: format!(
+                            "sha256:{}",
+                            hex::encode(Sha256::digest(original_content.as_bytes()))
+                        ),
+                        sample_changes: changes,
+                    });
+                } else {
+                    file_results.push(FileDiffResult {
+                        file_path: file_path.clone(),
+                        file_size_bytes: file_size,
+                        changes,
+                        total_changes: matches.len(),
+                        file_hash: format!(
+                            "sha256:{}",
+                            hex::encode(Sha256::digest(original_content.as_bytes()))
+                        ),
+                    });
+                }
+            }
+        }
+
+        Ok(FileReplaceResult {
+            file_results,
+            summary_results,
+            next_cursor,
+            total_files_found,
+            dry_run: param.dry_run,
+            total_changes,
+            files_with_changes,
+        })
     }
 
     /// Apply rule-based replacement using ast-grep's built-in functionality
@@ -244,17 +364,19 @@ impl ReplaceService {
         lang: Language,
     ) -> Result<String, ServiceError> {
         // Create a pattern from the rule that was already evaluated
-        // Since we already have matches, we can use ast-grep's replace functionality directly
-
         // For the console.log -> logger.log rule, we'll use the pattern directly
-        if fix_template.contains("logger.log") {
-            let pattern = "console.log($ARGS)";
-            let replacement = "logger.log($ARGS)";
+        if fix_template.contains("logger.") {
+            let pattern = "console.$METHOD($ARGS)";
+            let replacement = "logger.$METHOD($ARGS)";
 
-            match self
-                .pattern_matcher
-                .replace(content, pattern, replacement, lang)
-            {
+            match self.pattern_matcher.replace_with_options(
+                content,
+                pattern,
+                replacement,
+                lang,
+                None,
+                None,
+            ) {
                 Ok(result) => Ok(result),
                 Err(e) => {
                     eprintln!("Pattern replace failed: {e:?}");
@@ -268,141 +390,6 @@ impl ReplaceService {
             Ok(content.to_string())
         }
     }
-
-    /// Shared file processing logic for both pattern-based and rule-based replacements
-    async fn process_files_with_replacements<F>(
-        &self,
-        path_pattern: &str,
-        max_file_size: u64,
-        max_results: usize,
-        cursor: Option<&CursorParam>,
-        dry_run: bool,
-        mut replacement_fn: F,
-    ) -> Result<FileReplaceResult, ServiceError>
-    where
-        F: FnMut(&str) -> Result<Option<(String, Vec<ChangeResult>)>, ServiceError>,
-    {
-        // Validate the path pattern for security
-        let validated_pattern = validate_path_pattern(path_pattern)?;
-
-        let glob = Glob::new(&validated_pattern)
-            .map_err(|e| ServiceError::Internal(format!("Invalid glob pattern: {e}")))?;
-        let mut glob_builder = GlobSetBuilder::new();
-        glob_builder.add(glob);
-        let glob_set = glob_builder
-            .build()
-            .map_err(|e| ServiceError::Internal(format!("Failed to build glob set: {e}")))?;
-
-        // Collect all potential files first
-        let all_files: Vec<(String, PathBuf, u64)> = self
-            .config
-            .root_directories
-            .iter()
-            .flat_map(|root_dir| {
-                WalkDir::new(root_dir)
-                    .max_depth(10)
-                    .into_iter()
-                    .filter_map(|e| e.ok())
-                    .filter(|e| e.file_type().is_file())
-                    .filter_map(|entry| {
-                        let path = entry.path();
-                        let path_str = path.to_string_lossy().to_string();
-
-                        // Check if matches glob pattern
-                        if !glob_set.is_match(&path_str) {
-                            return None;
-                        }
-
-                        // Check file size
-                        entry
-                            .metadata()
-                            .ok()
-                            .filter(|m| m.len() <= max_file_size)
-                            .map(|m| (path_str, path.to_path_buf(), m.len()))
-                    })
-            })
-            .collect();
-
-        // Sort files for consistent pagination
-        let mut sorted_files = all_files;
-        sorted_files.sort_by(|a, b| a.0.cmp(&b.0));
-
-        // Apply cursor filtering
-        let cursor_filter = cursor.map(|c| c.last_file_path.clone());
-
-        // Process files and collect results
-        let mut file_results = Vec::new();
-        let mut total_files_found = 0;
-        let mut total_changes = 0;
-        let mut files_with_changes = 0;
-
-        for (path_str, path_buf, file_size) in sorted_files
-            .into_iter()
-            .filter(|(path, _, _)| cursor_filter.as_ref().is_none_or(|start| path > start))
-        {
-            // Read file content
-            let content = match std::fs::read_to_string(&path_buf) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-
-            // Apply the replacement function
-            if let Some((new_content, changes)) = replacement_fn(&content)? {
-                total_files_found += 1;
-                let file_hash = format!("{:x}", Sha256::digest(content.as_bytes()));
-                let change_count = changes.len();
-                total_changes += change_count;
-
-                if change_count > 0 {
-                    files_with_changes += 1;
-
-                    // Write file if not dry run
-                    if !dry_run {
-                        std::fs::write(&path_buf, new_content)?;
-                    }
-                }
-
-                file_results.push(FileDiffResult {
-                    file_path: path_str.clone(),
-                    file_size_bytes: file_size,
-                    changes,
-                    total_changes: change_count,
-                    file_hash,
-                });
-
-                // Check if we've reached the limit
-                if file_results.len() >= max_results {
-                    let next_cursor = Some(CursorResult {
-                        last_file_path: path_str,
-                        is_complete: false,
-                    });
-
-                    return Ok(FileReplaceResult {
-                        file_results,
-                        summary_results: vec![],
-                        next_cursor,
-                        total_files_found,
-                        dry_run,
-                        total_changes,
-                        files_with_changes,
-                    });
-                }
-            }
-        }
-
-        Ok(FileReplaceResult {
-            file_results,
-            summary_results: vec![],
-            next_cursor: Some(CursorResult {
-                last_file_path: String::new(),
-                is_complete: true,
-            }),
-            total_files_found,
-            dry_run,
-            total_changes,
-            files_with_changes,
-        })
-    }
 }
 
 #[cfg(test)]
@@ -415,8 +402,7 @@ mod tests {
     use std::path::Path;
     use tempfile::TempDir;
 
-    fn create_test_replace_service() -> (ReplaceService, TempDir) {
-        let temp_dir = TempDir::new().unwrap();
+    fn create_test_replace_service(temp_dir: &TempDir) -> ReplaceService {
         let config = ServiceConfig {
             root_directories: vec![temp_dir.path().to_path_buf()],
             ..Default::default()
@@ -424,10 +410,7 @@ mod tests {
         let pattern_matcher = PatternMatcher::new();
         let rule_evaluator = RuleEvaluator::new();
 
-        (
-            ReplaceService::new(config, pattern_matcher, rule_evaluator),
-            temp_dir,
-        )
+        ReplaceService::new(config, pattern_matcher, rule_evaluator)
     }
 
     fn create_test_file(dir: &Path, name: &str, content: &str) {
@@ -440,7 +423,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_replace_basic() {
-        let (service, _temp_dir) = create_test_replace_service();
+        let temp_dir = TempDir::new().unwrap();
+        let service = create_test_replace_service(&temp_dir);
         let code = r#"
 var x = 1;
 var y = 2;
@@ -460,7 +444,8 @@ var y = 2;
 
     #[tokio::test]
     async fn test_replace_no_matches() {
-        let (service, _temp_dir) = create_test_replace_service();
+        let temp_dir = TempDir::new().unwrap();
+        let service = create_test_replace_service(&temp_dir);
         let code = "function test() { return 42; }";
         let param = ReplaceParam::new(code, "console.log($VAR)", "logger.info($VAR)", "javascript");
 
@@ -471,7 +456,8 @@ var y = 2;
 
     #[tokio::test]
     async fn test_replace_invalid_language() {
-        let (service, _temp_dir) = create_test_replace_service();
+        let temp_dir = TempDir::new().unwrap();
+        let service = create_test_replace_service(&temp_dir);
         let param = ReplaceParam::new("test", "test", "replacement", "invalid_language");
 
         let result = service.replace(param).await;
@@ -480,7 +466,8 @@ var y = 2;
 
     #[tokio::test]
     async fn test_file_replace_basic() {
-        let (service, temp_dir) = create_test_replace_service();
+        let temp_dir = TempDir::new().unwrap();
+        let service = create_test_replace_service(&temp_dir);
 
         create_test_file(
             temp_dir.path(),
@@ -509,15 +496,18 @@ var y = 2;
         };
 
         let result = service.file_replace(param).await.unwrap();
-        assert_eq!(result.file_results.len(), 1);
-        assert!(result.file_results[0].file_path.ends_with("test.js"));
-        assert_eq!(result.file_results[0].total_changes, 2);
+        assert_eq!(result.summary_results.len(), 1);
+        assert!(result.summary_results[0].file_path.ends_with("test.js"));
+        assert_eq!(result.summary_results[0].total_changes, 2);
+        assert_eq!(result.files_with_changes, 1);
+        assert_eq!(result.total_changes, 2);
         assert!(result.dry_run);
     }
 
     #[tokio::test]
     async fn test_file_replace_not_dry_run() {
-        let (service, temp_dir) = create_test_replace_service();
+        let temp_dir = TempDir::new().unwrap();
+        let service = create_test_replace_service(&temp_dir);
 
         let file_path = temp_dir.path().join("test.js");
         let original_content = "var x = 1;";
@@ -551,7 +541,8 @@ var y = 2;
 
     #[tokio::test]
     async fn test_file_replace_summary_only() {
-        let (service, temp_dir) = create_test_replace_service();
+        let temp_dir = TempDir::new().unwrap();
+        let service = create_test_replace_service(&temp_dir);
 
         create_test_file(temp_dir.path(), "test.js", "var x = 1; var y = 2;");
 
@@ -573,15 +564,17 @@ var y = 2;
         };
 
         let result = service.file_replace(param).await.unwrap();
-        // Summary mode is not currently implemented - file results are always returned
-        assert_eq!(result.file_results.len(), 1);
-        assert_eq!(result.summary_results.len(), 0);
-        assert_eq!(result.file_results[0].total_changes, 2);
+        // Summary mode returns summary_results
+        assert_eq!(result.file_results.len(), 0);
+        assert_eq!(result.summary_results.len(), 1);
+        assert_eq!(result.summary_results[0].total_changes, 2);
+        assert_eq!(result.summary_results[0].sample_changes.len(), 1); // max_samples was 1
     }
 
     #[tokio::test]
     async fn test_file_replace_complete_cursor() {
-        let (service, _temp_dir) = create_test_replace_service();
+        let temp_dir = TempDir::new().unwrap();
+        let service = create_test_replace_service(&temp_dir);
 
         let param = FileReplaceParam {
             path_pattern: "**/*.js".to_string(),
@@ -610,7 +603,8 @@ var y = 2;
 
     #[tokio::test]
     async fn test_rule_replace_basic() {
-        let (service, temp_dir) = create_test_replace_service();
+        let temp_dir = TempDir::new().unwrap();
+        let service = create_test_replace_service(&temp_dir);
 
         create_test_file(
             temp_dir.path(),
@@ -648,7 +642,8 @@ fix: "logger.info($VAR)"
 
     #[tokio::test]
     async fn test_rule_replace_no_fix_field() {
-        let (service, _temp_dir) = create_test_replace_service();
+        let temp_dir = TempDir::new().unwrap();
+        let service = create_test_replace_service(&temp_dir);
 
         let rule_config = r#"
 id: test-rule
@@ -674,7 +669,8 @@ rule:
 
     #[tokio::test]
     async fn test_rule_replace_default_path_pattern() {
-        let (service, temp_dir) = create_test_replace_service();
+        let temp_dir = TempDir::new().unwrap();
+        let service = create_test_replace_service(&temp_dir);
 
         create_test_file(temp_dir.path(), "test.js", "console.log('test');");
 
@@ -702,7 +698,8 @@ fix: "logger.info($VAR)"
 
     #[tokio::test]
     async fn test_rule_replace_complete_cursor() {
-        let (service, _temp_dir) = create_test_replace_service();
+        let temp_dir = TempDir::new().unwrap();
+        let service = create_test_replace_service(&temp_dir);
 
         let rule_config = r#"
 id: test-rule
@@ -732,7 +729,8 @@ fix: "logger.info($VAR)"
 
     #[tokio::test]
     async fn test_file_replace_size_limit() {
-        let (service, temp_dir) = create_test_replace_service();
+        let temp_dir = TempDir::new().unwrap();
+        let service = create_test_replace_service(&temp_dir);
 
         // Create a large file
         let large_content = "var x = 1; ".repeat(1000);

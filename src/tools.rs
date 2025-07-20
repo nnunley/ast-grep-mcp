@@ -15,13 +15,13 @@ impl ToolService {
             tools: vec![
                 Tool {
                     name: "search".into(),
-                    description: "Search for patterns in code using ast-grep.".into(),
+                    description: Some("Search for AST patterns in code strings. Use $VAR to capture single nodes, $$$ for multiple nodes (lists). Example patterns: 'console.log($MSG)', 'function $NAME($PARAMS) { $$$ }'. Returns matches with precise line/column positions and captured variables.".into()),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({
                         "type": "object",
                         "properties": {
-                            "code": { "type": "string" },
-                            "pattern": { "type": "string" },
-                            "language": { "type": "string" },
+                            "code": { "type": "string", "description": "Source code to search in" },
+                            "pattern": { "type": "string", "description": "AST pattern to search for. Use $VAR for single captures, $$$ for multiple captures" },
+                            "language": { "type": "string", "description": "Programming language (javascript, typescript, python, rust, java, go, cpp, etc.)" },
                             "strictness": { "type": "string", "enum": ["cst", "smart", "ast", "relaxed", "signature"], "description": "Match strictness level" },
                             "selector": { "type": "string", "description": "CSS-like selector for matching specific node types" },
                             "context": { "type": "string", "description": "Context pattern to match surrounding code" },
@@ -31,18 +31,19 @@ impl ToolService {
                         },
                         "required": ["code", "pattern", "language"]
                     })).unwrap()),
+                    annotations: None,
                 },
                 Tool {
                     name: "file_search".into(),
-                    description: "Search for patterns in a file using ast-grep.".into(),
+                    description: Some("Search files for AST patterns using glob patterns. Use path_pattern like '**/*.js' or 'src/**/*.{ts,tsx}'. Supports pagination with cursor for large codebases. Returns matches grouped by file with context lines.".into()),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({
                         "type": "object",
                         "properties": {
-                            "path_pattern": { "type": "string" },
-                            "pattern": { "type": "string" },
-                            "language": { "type": "string" },
-                            "max_results": { "type": "integer", "minimum": 1, "maximum": 50, "default": 20 },
-                            "max_file_size": { "type": "integer", "minimum": 1024, "maximum": 1073741824 },
+                            "path_pattern": { "type": "string", "description": "Glob pattern for files to search (e.g., '**/*.js', 'src/**/*.{ts,tsx}')" },
+                            "pattern": { "type": "string", "description": "AST pattern to search for. Use $VAR for single captures, $$$ for multiple captures" },
+                            "language": { "type": "string", "description": "Programming language of target files" },
+                            "max_results": { "type": "integer", "minimum": 1, "maximum": 50, "default": 20, "description": "Maximum number of matches to return" },
+                            "max_file_size": { "type": "integer", "minimum": 1024, "maximum": 1073741824, "description": "Maximum file size to search in bytes" },
                             "cursor": {
                                 "type": "object",
                                 "properties": {
@@ -60,32 +61,35 @@ impl ToolService {
                         },
                         "required": ["path_pattern", "pattern", "language"]
                     })).unwrap()),
+                    annotations: None,
                 },
                 Tool {
                     name: "replace".into(),
-                    description: "Replace patterns in code.".into(),
+                    description: Some("Replace AST patterns in code strings. Use $VAR in both pattern and replacement to preserve captured nodes. Example: pattern 'console.log($MSG)', replacement 'console.warn($MSG)'. Returns the modified code with changes applied.".into()),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({
                         "type": "object",
                         "properties": {
-                            "code": { "type": "string" },
-                            "pattern": { "type": "string" },
-                            "replacement": { "type": "string" },
-                            "language": { "type": "string" }
-                        }
+                            "code": { "type": "string", "description": "Source code to modify" },
+                            "pattern": { "type": "string", "description": "AST pattern to find and replace" },
+                            "replacement": { "type": "string", "description": "Replacement pattern with captured variables (e.g., use $VAR from pattern)" },
+                            "language": { "type": "string", "description": "Programming language of the code" }
+                        },
+                        "required": ["code", "pattern", "replacement", "language"]
                     })).unwrap()),
+                    annotations: None,
                 },
                 Tool {
                     name: "file_replace".into(),
-                    description: "Replace patterns in files. Use summary_only=true for bulk refactoring to avoid token limits. Returns change counts or line diffs.".into(),
+                    description: Some("Replace AST patterns in multiple files using glob patterns. Use summary_only=true for bulk refactoring (returns counts instead of full diffs). Supports dry_run for preview. Essential for large-scale codebase modifications.".into()),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({
                         "type": "object",
                         "properties": {
-                            "path_pattern": { "type": "string" },
-                            "pattern": { "type": "string" },
-                            "replacement": { "type": "string" },
-                            "language": { "type": "string" },
-                            "max_results": { "type": "integer", "minimum": 1, "maximum": 10000 },
-                            "max_file_size": { "type": "integer", "minimum": 1024, "maximum": 1073741824 },
+                            "path_pattern": { "type": "string", "description": "Glob pattern for files to modify (e.g., '**/*.js', 'src/**/*.{ts,tsx}')" },
+                            "pattern": { "type": "string", "description": "AST pattern to find and replace" },
+                            "replacement": { "type": "string", "description": "Replacement pattern with captured variables" },
+                            "language": { "type": "string", "description": "Programming language of target files" },
+                            "max_results": { "type": "integer", "minimum": 1, "maximum": 10000, "description": "Maximum number of matches to process" },
+                            "max_file_size": { "type": "integer", "minimum": 1024, "maximum": 1073741824, "description": "Maximum file size to process in bytes" },
                             "dry_run": { "type": "boolean", "default": true, "description": "If true (default), only show preview. If false, actually modify files." },
                             "summary_only": { "type": "boolean", "default": false, "description": "If true, only return summary statistics (change counts per file)" },
                             "include_samples": { "type": "boolean", "default": false, "description": "If true, include sample changes in the response (first few changes per file)" },
@@ -101,24 +105,21 @@ impl ToolService {
                         },
                         "required": ["path_pattern", "pattern", "replacement", "language"]
                     })).unwrap()),
+                    annotations: None,
                 },
                 Tool {
                     name: "list_languages".into(),
-                    description: "List all supported programming languages.".into(),
+                    description: Some("Get all supported programming languages for AST pattern matching. Returns 20+ languages including javascript, typescript, python, rust, java, go, cpp, csharp, etc. Use these exact language names in other tools.".into()),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({ "type": "object", "properties": {} })).unwrap()),
-                },
-                Tool {
-                    name: "documentation".into(),
-                    description: "Provides detailed usage examples for all tools.".into(),
-                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({ "type": "object", "properties": {} })).unwrap()),
+                    annotations: None,
                 },
                 Tool {
                     name: "rule_search".into(),
-                    description: "Search for patterns using ast-grep rule configurations (YAML/JSON). Supports complex pattern matching with relational and composite rules.".into(),
+                    description: Some("Search using ast-grep YAML rule configurations. Rules support complex patterns with conditions, constraints, and relational matching. More powerful than simple patterns - use for advanced searches requiring logical conditions or multiple pattern combinations.".into()),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({
                         "type": "object",
                         "properties": {
-                            "rule_config": { "type": "string", "description": "YAML or JSON rule configuration" },
+                            "rule_config": { "type": "string", "description": "YAML rule configuration with id, language, rule (pattern/kind/regex), and optional constraints" },
                             "path_pattern": { "type": "string", "description": "Glob pattern for files to search (optional, searches all files if not provided)" },
                             "max_results": { "type": "integer", "minimum": 1, "maximum": 10000 },
                             "max_file_size": { "type": "integer", "minimum": 1024, "maximum": 1073741824 },
@@ -133,14 +134,15 @@ impl ToolService {
                         },
                         "required": ["rule_config"]
                     })).unwrap()),
+                    annotations: None,
                 },
                 Tool {
                     name: "rule_replace".into(),
-                    description: "Replace patterns using ast-grep rule configurations with fix transformations. Supports complex rule-based code refactoring.".into(),
+                    description: Some("Replace using ast-grep YAML rule configurations with 'fix' transformations. Rules can include conditions and complex replacement logic. Essential for sophisticated refactoring beyond simple find-replace patterns.".into()),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({
                         "type": "object",
                         "properties": {
-                            "rule_config": { "type": "string", "description": "YAML or JSON rule configuration with fix field" },
+                            "rule_config": { "type": "string", "description": "YAML rule configuration with id, language, rule, and fix field for replacements" },
                             "path_pattern": { "type": "string", "description": "Glob pattern for files to modify (optional, processes all files if not provided)" },
                             "max_results": { "type": "integer", "minimum": 1, "maximum": 10000 },
                             "max_file_size": { "type": "integer", "minimum": 1024, "maximum": 1073741824 },
@@ -157,34 +159,37 @@ impl ToolService {
                         },
                         "required": ["rule_config"]
                     })).unwrap()),
+                    annotations: None,
                 },
                 Tool {
                     name: "validate_rule".into(),
-                    description: "Validate ast-grep rule configuration syntax and optionally test against sample code.".into(),
+                    description: Some("Validate ast-grep YAML rule syntax and test against sample code. Use this to verify rule configurations before using them in rule_search or rule_replace. Returns validation errors or successful match results.".into()),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({
                         "type": "object",
                         "properties": {
-                            "rule_config": { "type": "string", "description": "YAML or JSON rule configuration to validate" },
+                            "rule_config": { "type": "string", "description": "YAML rule configuration to validate (must include id, language, and rule fields)" },
                             "test_code": { "type": "string", "description": "Optional code sample to test the rule against" }
                         },
                         "required": ["rule_config"]
                     })).unwrap()),
+                    annotations: None,
                 },
                 Tool {
                     name: "create_rule".into(),
-                    description: "Create and store a new ast-grep rule configuration for reuse. LLMs can use this to build custom rule libraries.".into(),
+                    description: Some("Create and store a new ast-grep rule configuration for reuse. Build a library of custom rules for common patterns. Stored rules can be retrieved with get_rule and deleted with delete_rule.".into()),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({
                         "type": "object",
                         "properties": {
-                            "rule_config": { "type": "string", "description": "YAML or JSON rule configuration to create" },
+                            "rule_config": { "type": "string", "description": "Complete YAML rule configuration with id, language, rule, and optional fix/constraints" },
                             "overwrite": { "type": "boolean", "default": false, "description": "Whether to overwrite existing rule with same ID" }
                         },
                         "required": ["rule_config"]
                     })).unwrap()),
+                    annotations: None,
                 },
                 Tool {
                     name: "list_rules".into(),
-                    description: "List all stored rule configurations with optional filtering by language or severity.".into(),
+                    description: Some("List all stored rule configurations with optional filtering. Shows rule IDs, languages, and descriptions. Use to discover available rules before using get_rule to retrieve specific configurations.".into()),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({
                         "type": "object",
                         "properties": {
@@ -192,10 +197,11 @@ impl ToolService {
                             "severity": { "type": "string", "description": "Filter rules by severity level (info, warning, error)" }
                         }
                     })).unwrap()),
+                    annotations: None,
                 },
                 Tool {
                     name: "get_rule".into(),
-                    description: "Retrieve a specific stored rule configuration by ID.".into(),
+                    description: Some("Retrieve a specific stored rule configuration by its ID. Returns the complete YAML rule configuration that can be used directly with rule_search or rule_replace tools.".into()),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({
                         "type": "object",
                         "properties": {
@@ -203,10 +209,11 @@ impl ToolService {
                         },
                         "required": ["rule_id"]
                     })).unwrap()),
+                    annotations: None,
                 },
                 Tool {
                     name: "delete_rule".into(),
-                    description: "Delete a stored rule configuration by ID.".into(),
+                    description: Some("Delete a stored rule configuration by its ID. Permanently removes the rule from storage. Use list_rules to see available rule IDs before deletion.".into()),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({
                         "type": "object",
                         "properties": {
@@ -214,83 +221,20 @@ impl ToolService {
                         },
                         "required": ["rule_id"]
                     })).unwrap()),
-                },
-                Tool {
-                    name: "list_catalog_rules".into(),
-                    description: "List available rules from the ast-grep catalog with optional filtering.".into(),
-                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "language": { "type": "string", "description": "Filter rules by programming language" },
-                            "category": { "type": "string", "description": "Filter rules by category" }
-                        }
-                    })).unwrap()),
-                },
-                Tool {
-                    name: "import_catalog_rule".into(),
-                    description: "Import a rule from the ast-grep catalog into local storage.".into(),
-                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "rule_url": { "type": "string", "description": "URL of the catalog rule to import" },
-                            "rule_id": { "type": "string", "description": "Optional custom ID for the imported rule" }
-                        },
-                        "required": ["rule_url"]
-                    })).unwrap()),
+                    annotations: None,
                 },
                 Tool {
                     name: "generate_ast".into(),
-                    description: "Generate a stringified syntax tree for code using Tree-sitter. Useful for debugging patterns and understanding AST structure. Also returns available node kinds for Kind rules.".into(),
+                    description: Some("Generate Abstract Syntax Tree for code and discover Tree-sitter node kinds. Essential for writing Kind-based rules - shows exact node types like function_declaration, identifier, call_expression. Use when you need to know the precise AST structure for advanced pattern matching.".into()),
                     input_schema: Arc::new(serde_json::from_value(serde_json::json!({
                         "type": "object",
                         "properties": {
-                            "code": { "type": "string", "description": "Source code to parse" },
-                            "language": { "type": "string", "description": "Programming language of the code" }
+                            "code": { "type": "string", "description": "Source code to parse and generate AST for" },
+                            "language": { "type": "string", "description": "Programming language for correct AST generation" }
                         },
                         "required": ["code", "language"]
                     })).unwrap()),
-                },
-                Tool {
-                    name: "debug_pattern".into(),
-                    description: "Debug ast-grep patterns to understand their structure and behavior. Shows pattern analysis, metavariables, and optionally tests against sample code.".into(),
-                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "pattern": { "type": "string", "description": "The ast-grep pattern to debug" },
-                            "language": { "type": "string", "description": "Programming language for the pattern" },
-                            "sample_code": { "type": "string", "description": "Optional sample code to test the pattern against" },
-                            "format": {
-                                "type": "string",
-                                "enum": ["pattern", "ast", "cst"],
-                                "default": "pattern",
-                                "description": "Debug format: 'pattern' for pattern analysis, 'ast' for AST view, 'cst' for CST view"
-                            }
-                        },
-                        "required": ["pattern", "language"]
-                    })).unwrap()),
-                },
-                Tool {
-                    name: "debug_ast".into(),
-                    description: "Generate enhanced AST/CST debug information with statistics and detailed tree structure analysis.".into(),
-                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "code": { "type": "string", "description": "Source code to parse into AST/CST" },
-                            "language": { "type": "string", "description": "Programming language for parsing" },
-                            "format": {
-                                "type": "string",
-                                "enum": ["ast", "cst"],
-                                "default": "ast",
-                                "description": "Debug format: 'ast' for Abstract Syntax Tree, 'cst' for Concrete Syntax Tree"
-                            },
-                            "include_trivia": {
-                                "type": "boolean",
-                                "default": true,
-                                "description": "Include trivia (whitespace, comments) in CST format"
-                            }
-                        },
-                        "required": ["code", "language"]
-                    })).unwrap()),
+                    annotations: None,
                 },
             ],
             ..Default::default()
@@ -356,179 +300,5 @@ impl ToolService {
         .collect();
 
         ListLanguagesResult { languages }
-    }
-
-    pub fn get_documentation() -> DocumentationResult {
-        let docs = r##"
-# AST-Grep MCP Service Documentation
-
-This service provides structural code search and transformation using ast-grep patterns and rule configurations.
-
-## Key Concepts
-
-**AST Patterns:** Use `$VAR` to capture single nodes, `$$$` to capture multiple statements
-**Languages:** Supports 20+ programming languages including JavaScript, TypeScript, Python, Rust, Java, etc.
-**Rules:** YAML/JSON configurations for complex pattern matching with logical operations
-
-## Basic Tools
-
-### search
-Search for patterns in code strings
-```json
-{
-  "code": "console.log('hello'); console.log('world');",
-  "pattern": "console.log($MSG)",
-  "language": "javascript"
-}
-```
-
-### file_search
-Search for patterns across files using glob patterns
-```json
-{
-  "path_pattern": "src/**/*.js",
-  "pattern": "function $NAME($ARGS) { $BODY }",
-  "language": "javascript"
-}
-```
-
-### replace
-Replace patterns in code strings
-```json
-{
-  "code": "var x = 1; var y = 2;",
-  "pattern": "var $VAR = $VALUE;",
-  "replacement": "let $VAR = $VALUE;",
-  "language": "javascript"
-}
-```
-
-### file_replace
-Replace patterns across files
-```json
-{
-  "path_pattern": "src/**/*.js",
-  "pattern": "console.log($MSG)",
-  "replacement": "logger.info($MSG)",
-  "language": "javascript",
-  "dry_run": true
-}
-```
-
-## Rule-Based Tools
-
-### rule_search
-Search using YAML/JSON rule configurations
-```yaml
-id: no-console-log
-language: javascript
-rule:
-  pattern: console.log($ARGS)
-```
-
-### rule_replace
-Replace using rules with fix transformations
-```yaml
-id: use-let
-language: javascript
-rule:
-  pattern: var $VAR = $VALUE;
-fix: let $VAR = $VALUE;
-```
-
-### Composite Rules
-Combine multiple conditions with logical operators:
-- `all`: Match nodes that satisfy ALL conditions
-- `any`: Match nodes that satisfy ANY condition
-- `not`: Match nodes that DON'T satisfy the condition
-
-```yaml
-id: complex-rule
-language: javascript
-rule:
-  all:
-    - pattern: function $NAME($ARGS) { $BODY }
-    - not:
-        pattern: function $NAME() { $BODY }
-```
-
-## Rule Management
-
-### create_rule
-Store custom rules for reuse
-```json
-{
-  "rule_config": "id: my-rule\nlanguage: javascript\nrule:\n  pattern: $PATTERN"
-}
-```
-
-### list_rules, get_rule, delete_rule
-Manage your stored rule library
-
-## Catalog Integration
-
-### list_catalog_rules
-Browse rules from the ast-grep catalog
-```json
-{
-  "language": "javascript",
-  "category": "best-practices"
-}
-```
-
-### import_catalog_rule
-Import rules from the online catalog
-```json
-{
-  "rule_url": "https://ast-grep.github.io/catalog/javascript/no-console-log"
-}
-```
-
-## Pattern Examples
-
-**Variable captures:** `$VAR`, `$NAME`, `$ARGS`
-**Multi-statement:** `$$$STATEMENTS`
-**Optional elements:** Use composite rules with `any`
-**Complex matching:** Combine `pattern`, `kind`, `regex` in rules
-
-## Discovery Tools
-
-### generate_ast
-Generate syntax tree and discover node kinds for writing Kind rules
-```json
-{
-  "code": "function test() { return 42; }",
-  "language": "javascript"
-}
-```
-
-Returns the AST structure and available Tree-sitter node kinds like:
-- `function_declaration`
-- `identifier`
-- `statement_block`
-- `return_statement`
-- `number`
-
-Use these node kinds in Kind rules:
-```yaml
-rule:
-  kind: function_declaration
-```
-
-### list_languages
-Get all supported programming languages for ast-grep patterns.
-
-## Performance Features
-
-- **Pattern caching:** Automatically caches compiled patterns
-- **Pagination:** Large result sets with cursor-based pagination
-- **File filtering:** Size limits and glob pattern filtering
-- **Summary mode:** For bulk operations, get counts instead of full diffs
-
-"##;
-
-        DocumentationResult {
-            content: docs.to_string(),
-        }
     }
 }

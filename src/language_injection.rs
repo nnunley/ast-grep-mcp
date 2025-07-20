@@ -3,7 +3,6 @@
 //! Provides automatic detection and configuration for embedded languages,
 //! mimicking ast-grep CLI's behavior for HTML/JS/CSS.
 
-use crate::types::EmbeddedLanguageConfig;
 use ast_grep_language::SupportLang as Language;
 use std::path::Path;
 
@@ -24,17 +23,17 @@ impl LanguageInjection {
             match (extension, pattern_language) {
                 // HTML with embedded JavaScript
                 ("html" | "htm", "javascript" | "js" | "typescript" | "ts") => {
-                    Some(InjectionConfig::html_javascript())
+                    Some(InjectionConfig::new(Language::JavaScript))
                 }
                 // HTML with embedded CSS
-                ("html" | "htm", "css") => Some(InjectionConfig::html_css()),
+                ("html" | "htm", "css") => Some(InjectionConfig::new(Language::Css)),
                 // Vue components (HTML by default, can contain JS/CSS)
                 ("vue", "javascript" | "js" | "typescript" | "ts") => {
-                    Some(InjectionConfig::vue_javascript())
+                    Some(InjectionConfig::new(Language::JavaScript))
                 }
-                ("vue", "css") => Some(InjectionConfig::vue_css()),
+                ("vue", "css") => Some(InjectionConfig::new(Language::Css)),
                 // JSX/TSX files might have CSS-in-JS
-                ("jsx" | "tsx", "css") => Some(InjectionConfig::jsx_css_in_js()),
+                ("jsx" | "tsx", "css") => Some(InjectionConfig::new(Language::Css)),
                 _ => None,
             }
         } else {
@@ -42,9 +41,9 @@ impl LanguageInjection {
             // Check if we're searching for JS/CSS patterns (might be in HTML string)
             match pattern_language {
                 "javascript" | "js" | "typescript" | "ts" => {
-                    Some(InjectionConfig::html_javascript())
+                    Some(InjectionConfig::new(Language::JavaScript))
                 }
-                "css" => Some(InjectionConfig::html_css()),
+                "css" => Some(InjectionConfig::new(Language::Css)),
                 _ => None,
             }
         }
@@ -69,80 +68,14 @@ impl LanguageInjection {
 /// Configuration for a specific language injection scenario
 #[derive(Debug, Clone)]
 pub struct InjectionConfig {
-    pub embedded_config: EmbeddedLanguageConfig,
+    pub language: Language,
     pub is_automatic: bool, // Whether this is a built-in automatic injection
 }
 
 impl InjectionConfig {
-    /// HTML with embedded JavaScript in <script> tags
-    fn html_javascript() -> Self {
+    fn new(language: Language) -> Self {
         Self {
-            embedded_config: EmbeddedLanguageConfig {
-                host_language: "html".to_string(),
-                embedded_language: "javascript".to_string(),
-                // Use a simpler pattern that captures the script content
-                extraction_pattern: "<script>$JS_CODE</script>".to_string(),
-                selector: None,
-                context: None,
-            },
-            is_automatic: true,
-        }
-    }
-
-    /// HTML with embedded CSS in <style> tags
-    fn html_css() -> Self {
-        Self {
-            embedded_config: EmbeddedLanguageConfig {
-                host_language: "html".to_string(),
-                embedded_language: "css".to_string(),
-                // Use a simpler pattern that captures the style content
-                extraction_pattern: "<style>$CSS_CODE</style>".to_string(),
-                selector: None,
-                context: None,
-            },
-            is_automatic: true,
-        }
-    }
-
-    /// Vue component with JavaScript in <script> tags
-    fn vue_javascript() -> Self {
-        Self {
-            embedded_config: EmbeddedLanguageConfig {
-                host_language: "html".to_string(),
-                embedded_language: "javascript".to_string(),
-                extraction_pattern: "<script$ATTRS>$JS_CODE</script>".to_string(),
-                selector: Some("script_element".to_string()),
-                context: None,
-            },
-            is_automatic: true,
-        }
-    }
-
-    /// Vue component with CSS in <style> tags
-    fn vue_css() -> Self {
-        Self {
-            embedded_config: EmbeddedLanguageConfig {
-                host_language: "html".to_string(),
-                embedded_language: "css".to_string(),
-                extraction_pattern: "<style$ATTRS>$CSS_CODE</style>".to_string(),
-                selector: Some("style_element".to_string()),
-                context: None,
-            },
-            is_automatic: true,
-        }
-    }
-
-    /// JSX/TSX with CSS-in-JS (styled-components style)
-    fn jsx_css_in_js() -> Self {
-        Self {
-            embedded_config: EmbeddedLanguageConfig {
-                host_language: "tsx".to_string(),
-                embedded_language: "css".to_string(),
-                // Match styled.div`...` or styled(Component)`...`
-                extraction_pattern: "styled.$COMPONENT`$CSS_CODE`".to_string(),
-                selector: None,
-                context: None,
-            },
+            language,
             is_automatic: true,
         }
     }
@@ -153,52 +86,62 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_html_javascript_detection() {
+    fn test_html_javascript_injection() {
         let config = LanguageInjection::should_use_injection(Some("index.html"), "javascript");
         assert!(config.is_some());
-        let config = config.unwrap();
-        assert_eq!(config.embedded_config.host_language, "html");
-        assert_eq!(config.embedded_config.embedded_language, "javascript");
-        assert!(config.is_automatic);
+        assert!(matches!(config.unwrap().language, Language::JavaScript));
     }
 
     #[test]
-    fn test_html_css_detection() {
+    fn test_html_css_injection() {
         let config = LanguageInjection::should_use_injection(Some("styles.html"), "css");
         assert!(config.is_some());
-        let config = config.unwrap();
-        assert_eq!(config.embedded_config.host_language, "html");
-        assert_eq!(config.embedded_config.embedded_language, "css");
+        assert!(matches!(config.unwrap().language, Language::Css));
     }
 
     #[test]
-    fn test_no_injection_for_js_file() {
-        let config = LanguageInjection::should_use_injection(Some("app.js"), "javascript");
+    fn test_vue_javascript_injection() {
+        let config = LanguageInjection::should_use_injection(Some("component.vue"), "javascript");
+        assert!(config.is_some());
+        assert!(matches!(config.unwrap().language, Language::JavaScript));
+    }
+
+    #[test]
+    fn test_jsx_css_injection() {
+        let config = LanguageInjection::should_use_injection(Some("component.jsx"), "css");
+        assert!(config.is_some());
+        assert!(matches!(config.unwrap().language, Language::Css));
+    }
+
+    #[test]
+    fn test_no_injection() {
+        // Python file with Python pattern - no injection needed
+        let config = LanguageInjection::should_use_injection(Some("script.py"), "python");
         assert!(config.is_none());
     }
 
     #[test]
-    fn test_vue_component_detection() {
-        let config = LanguageInjection::should_use_injection(Some("App.vue"), "javascript");
+    fn test_string_search_injection() {
+        // No file path, but searching for JS pattern
+        let config = LanguageInjection::should_use_injection(None, "javascript");
         assert!(config.is_some());
-        let config = config.unwrap();
-        assert_eq!(config.embedded_config.embedded_language, "javascript");
+        assert!(matches!(config.unwrap().language, Language::JavaScript));
     }
 
     #[test]
-    fn test_host_language_detection() {
-        assert_eq!(
+    fn test_get_host_language() {
+        assert!(matches!(
             LanguageInjection::get_host_language("index.html"),
             Some(Language::Html)
-        );
-        assert_eq!(
-            LanguageInjection::get_host_language("App.vue"),
+        ));
+        assert!(matches!(
+            LanguageInjection::get_host_language("component.vue"),
             Some(Language::Html)
-        );
-        assert_eq!(
-            LanguageInjection::get_host_language("Component.tsx"),
+        ));
+        assert!(matches!(
+            LanguageInjection::get_host_language("app.jsx"),
             Some(Language::Tsx)
-        );
-        assert_eq!(LanguageInjection::get_host_language("script.js"), None);
+        ));
+        assert!(LanguageInjection::get_host_language("script.py").is_none());
     }
 }

@@ -54,8 +54,6 @@ pub mod ast_grep_service;
 pub mod ast_utils;
 pub mod config;
 pub mod context_lines;
-pub mod debug;
-pub mod embedded;
 pub mod errors;
 pub mod language_injection;
 pub mod path_validation;

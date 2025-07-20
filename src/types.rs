@@ -10,8 +10,6 @@
 //! - **File Search Types**: [`FileSearchParam`], [`FileSearchResult`], [`FileMatchResult`]
 //! - **Replace Types**: [`ReplaceParam`], [`ReplaceResult`], [`ChangeResult`]
 //! - **File Replace Types**: [`FileReplaceParam`], [`FileReplaceResult`], [`FileDiffResult`]
-//! - **Pattern Suggestion Types**: [`SuggestPatternsParam`], [`SuggestPatternsResult`]
-//! - **Debug Types**: [`DebugPatternParam`], [`DebugAstParam`], [`DebugFormat`]
 //! - **Utility Types**: [`MatchStrictness`], [`CursorParam`], [`GenerateAstParam`]
 //!
 //! ## Important Notes
@@ -60,61 +58,6 @@ impl From<MatchStrictness> for ast_grep_core::MatchStrictness {
             MatchStrictness::Signature => ast_grep_core::MatchStrictness::Signature,
         }
     }
-}
-
-/// Parameters for pattern suggestion functionality.
-///
-/// This allows users to provide code examples and get suggested ast-grep patterns
-/// that would match those examples, reducing the complexity of writing patterns manually.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SuggestPatternsParam {
-    /// Code examples to analyze for pattern generation
-    pub code_examples: Vec<String>,
-    /// Programming language for the code examples
-    pub language: String,
-    /// Maximum number of pattern suggestions to return (default: 5)
-    pub max_suggestions: Option<usize>,
-    /// Specificity levels to include: "exact", "specific", "general"
-    pub specificity_levels: Option<Vec<String>>,
-}
-
-/// Result containing suggested patterns for the given code examples.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct SuggestPatternsResult {
-    /// List of pattern suggestions with confidence scores
-    pub suggestions: Vec<PatternSuggestion>,
-    /// The programming language analyzed
-    pub language: String,
-    /// Total number of suggestions generated
-    pub total_suggestions: usize,
-}
-
-/// A single pattern suggestion with metadata.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PatternSuggestion {
-    /// The suggested ast-grep pattern
-    pub pattern: String,
-    /// Confidence score from 0.0 to 1.0
-    pub confidence: f64,
-    /// How specific vs general this pattern is
-    pub specificity: SpecificityLevel,
-    /// Human-readable explanation of what the pattern matches
-    pub explanation: String,
-    /// Indices of input examples this pattern matches
-    pub matching_examples: Vec<usize>,
-    /// Tree-sitter node kinds involved in this pattern
-    pub node_kinds: Vec<String>,
-}
-
-/// Specificity level of a suggested pattern.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum SpecificityLevel {
-    /// Matches the exact structure with minimal metavariables
-    Exact,
-    /// Matches the core structure with some flexibility
-    Specific,
-    /// Matches broadly with many metavariables
-    General,
 }
 
 /// Parameters for searching patterns in code strings.
@@ -639,54 +582,6 @@ pub struct ListLanguagesResult {
     pub languages: Vec<String>,
 }
 
-/// Parameters for retrieving documentation.
-///
-/// This is an empty struct as no parameters are needed for documentation.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct DocumentationParam {}
-
-/// Result containing comprehensive usage documentation.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct DocumentationResult {
-    /// Markdown-formatted documentation content
-    pub content: String,
-}
-
-/// Parameters for listing rules from the ast-grep catalog.
-///
-/// The catalog contains community-contributed rules for common patterns and refactoring.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ListCatalogRulesParam {
-    /// Filter rules by programming language (optional)
-    pub language: Option<String>,
-    /// Filter rules by category (optional, e.g., "best-practices")
-    pub category: Option<String>,
-}
-
-/// Result containing available catalog rules.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ListCatalogRulesResult {
-    /// List of available rules with metadata
-    pub rules: Vec<CatalogRuleInfo>,
-}
-
-/// Information about a rule in the ast-grep catalog.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CatalogRuleInfo {
-    /// Unique identifier for the rule
-    pub id: String,
-    /// Human-readable name
-    pub name: String,
-    /// Description of what the rule does
-    pub description: String,
-    /// Programming language this rule applies to
-    pub language: String,
-    /// Category (e.g., "best-practices", "security")
-    pub category: String,
-    /// URL to the rule's source or documentation
-    pub url: String,
-}
-
 /// Parameters for generating syntax tree representations.
 ///
 /// Essential for LLM users to understand Tree-sitter node structure and discover
@@ -726,288 +621,35 @@ pub struct GenerateAstResult {
     pub node_kinds: Vec<String>,
 }
 
-/// Debug format type for pattern and AST visualization.
-///
-/// Different debug formats provide different levels of detail:
-/// - `Pattern`: Shows how the pattern is parsed and interpreted
-/// - `Ast`: Shows the Abstract Syntax Tree (semantic structure)
-/// - `Cst`: Shows the Concrete Syntax Tree (all tokens and trivia)
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum DebugFormat {
-    /// Show pattern parsing and matching structure
-    Pattern,
-    /// Show Abstract Syntax Tree (semantic nodes only)
-    Ast,
-    /// Show Concrete Syntax Tree (all tokens including whitespace)
-    Cst,
-}
-
-/// Parameters for pattern debugging functionality.
-///
-/// This helps users understand how their patterns are parsed and what they match against.
-///
-/// # Example
-///
-/// ```rust
-/// use ast_grep_mcp::{DebugPatternParam, DebugFormat};
-///
-/// let param = DebugPatternParam {
-///     pattern: "$FN($ARG)".to_string(),
-///     language: "javascript".to_string(),
-///     sample_code: Some("console.log('test')".to_string()),
-///     format: DebugFormat::Pattern,
-/// };
-/// ```
-#[derive(Debug, Serialize, Deserialize)]
-pub struct DebugPatternParam {
-    /// The ast-grep pattern to debug
-    pub pattern: String,
-    /// Programming language for the pattern
-    pub language: String,
-    /// Optional sample code to test the pattern against
-    pub sample_code: Option<String>,
-    /// Debug format type
-    pub format: DebugFormat,
-}
-
-/// Result containing pattern debug information.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct DebugPatternResult {
-    /// The original pattern that was debugged
-    pub pattern: String,
-    /// Programming language
-    pub language: String,
-    /// Debug format used
-    pub format: DebugFormat,
-    /// Detailed debug information
-    pub debug_info: String,
-    /// If sample code was provided, show matches
-    pub sample_matches: Option<Vec<MatchResult>>,
-    /// Explanation of what the pattern matches
-    pub explanation: String,
-}
-
-/// Enhanced parameters for AST generation with debug options.
-///
-/// Extends the basic GenerateAstParam with additional debug formatting options.
-///
-/// # Example
-///
-/// ```rust
-/// use ast_grep_mcp::{DebugAstParam, DebugFormat};
-///
-/// let param = DebugAstParam {
-///     code: "function test() { return 42; }".to_string(),
-///     language: "javascript".to_string(),
-///     format: DebugFormat::Cst,
-///     include_trivia: true,
-/// };
-/// ```
-#[derive(Debug, Serialize, Deserialize)]
-pub struct DebugAstParam {
-    /// Source code to parse into AST
-    pub code: String,
-    /// Programming language for parsing
-    pub language: String,
-    /// Debug format type (AST or CST)
-    pub format: DebugFormat,
-    /// Include trivia (whitespace, comments) in CST format
-    #[serde(default = "default_true")]
-    pub include_trivia: bool,
-}
-
-/// Enhanced result containing detailed AST/CST information.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct DebugAstResult {
-    /// String representation of the syntax tree
-    pub tree: String,
-    /// The programming language that was parsed
-    pub language: String,
-    /// Debug format used
-    pub format: DebugFormat,
-    /// Length of the input code in characters
-    pub code_length: usize,
-    /// All Tree-sitter node kinds found
-    pub node_kinds: Vec<String>,
-    /// Tree statistics
-    pub tree_stats: TreeStats,
-}
-
-/// Statistics about the parsed syntax tree.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct TreeStats {
-    /// Total number of nodes in the tree
-    pub total_nodes: usize,
-    /// Number of leaf nodes (terminals)
-    pub leaf_nodes: usize,
-    /// Maximum depth of the tree
-    pub max_depth: usize,
-    /// Number of error nodes
-    pub error_nodes: usize,
-}
-
-/// Parameters for importing a rule from the ast-grep catalog.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ImportCatalogRuleParam {
-    /// URL of the catalog rule to import
-    pub rule_url: String,
-    /// Optional custom ID for the imported rule (defaults to URL-based ID)
-    pub rule_id: Option<String>,
-}
-
-/// Result of importing a catalog rule.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ImportCatalogRuleResult {
-    /// ID of the imported rule (for future reference)
-    pub rule_id: String,
-    /// Whether the rule was successfully imported
-    pub imported: bool,
-    /// Human-readable status message
-    pub message: String,
-}
-
-/// Configuration for extracting embedded languages from host languages.
-///
-/// This defines how to extract code blocks from one language that contain
-/// code written in another language (e.g., JavaScript in HTML, SQL in Python).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EmbeddedLanguageConfig {
-    /// The host language (e.g., "html", "python")
-    pub host_language: String,
-    /// The embedded language (e.g., "javascript", "sql")
-    pub embedded_language: String,
-    /// Pattern to match the embedded code in the host language
-    pub extraction_pattern: String,
-    /// Optional selector to narrow down the extraction
-    pub selector: Option<String>,
-    /// Optional context pattern for more precise matching
-    pub context: Option<String>,
-}
-
-/// Parameters for searching in embedded languages.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct EmbeddedSearchParam {
-    /// Code containing embedded languages
-    pub code: String,
-    /// Pattern to search for in the embedded language
-    pub pattern: String,
-    /// Configuration for extracting embedded code
-    pub embedded_config: EmbeddedLanguageConfig,
-    /// Optional match strictness
-    pub strictness: Option<MatchStrictness>,
-}
-
-/// Result of searching in embedded languages.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct EmbeddedSearchResult {
-    /// Matches found in embedded code blocks
-    pub matches: Vec<EmbeddedMatchResult>,
-    /// Host language used for extraction
-    pub host_language: String,
-    /// Embedded language searched
-    pub embedded_language: String,
-    /// Total number of embedded code blocks found
-    pub total_embedded_blocks: usize,
-}
-
-/// A match result from embedded language search.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EmbeddedMatchResult {
-    /// The matched text
-    pub text: String,
-    /// Starting line number in host file
-    pub start_line: usize,
-    /// Ending line number in host file
-    pub end_line: usize,
-    /// Starting column number in host file
-    pub start_col: usize,
-    /// Ending column number in host file
-    pub end_col: usize,
-    /// Host context description
-    pub host_context: String,
-    /// Index of the embedded code block (0-based)
-    pub embedded_block_index: usize,
-    /// Captured metavariables from the pattern
-    pub vars: HashMap<String, String>,
-}
-
-/// Parameters for file-based embedded language search.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct EmbeddedFileSearchParam {
-    /// Path pattern (glob)
-    pub path_pattern: String,
-    /// Pattern to search for in embedded language
-    pub pattern: String,
-    /// Embedded language configuration
-    pub embedded_config: EmbeddedLanguageConfig,
-    /// Maximum number of results to return
-    #[serde(default = "default_max_results")]
-    pub max_results: usize,
-    /// Maximum file size to process
-    #[serde(default = "default_max_file_size")]
-    pub max_file_size: u64,
-    /// Pagination cursor
-    pub cursor: Option<CursorParam>,
-    /// Optional match strictness
-    pub strictness: Option<MatchStrictness>,
-}
-
-/// Result of file-based embedded language search.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct EmbeddedFileSearchResult {
-    /// Files containing matches
-    pub matches: Vec<EmbeddedFileMatchResult>,
-    /// Pagination cursor for next page
-    pub next_cursor: Option<CursorResult>,
-    /// Total number of files found
-    pub total_files_found: usize,
-}
-
-/// Match result for a file containing embedded languages.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EmbeddedFileMatchResult {
-    /// File path
-    pub file_path: String,
-    /// File size in bytes
-    pub file_size_bytes: u64,
-    /// Matches found in embedded code blocks
-    pub matches: Vec<EmbeddedMatchResult>,
-    /// Hash of the file content
-    pub file_hash: String,
-    /// Total embedded code blocks found in file
-    pub total_blocks: usize,
-}
-
 // Default functions for serde deserialization
 
 /// Default maximum results for search operations (20)
-fn default_max_results() -> usize {
+pub fn default_max_results() -> usize {
     20
 }
 
 /// Default maximum results for large operations like file replacement (10,000)
-fn default_max_results_large() -> usize {
+pub fn default_max_results_large() -> usize {
     10000
 }
 
 /// Default maximum file size to process (50 MB)
-fn default_max_file_size() -> u64 {
+pub fn default_max_file_size() -> u64 {
     50 * 1024 * 1024
 }
 
 /// Default value for boolean fields that should be true
-fn default_true() -> bool {
+pub fn default_true() -> bool {
     true
 }
 
 /// Default value for boolean fields that should be false
-fn default_false() -> bool {
+pub fn default_false() -> bool {
     false
 }
 
 /// Default maximum number of sample changes to include (3)
-fn default_max_samples() -> usize {
+pub fn default_max_samples() -> usize {
     3
 }
 
@@ -1202,37 +844,6 @@ mod tests {
 
         assert_eq!(param.code, deserialized.code);
         assert_eq!(param.language, deserialized.language);
-    }
-
-    #[test]
-    fn test_list_catalog_rules_param_optional_fields() {
-        let param1 = ListCatalogRulesParam {
-            language: Some("javascript".to_string()),
-            category: None,
-        };
-
-        let param2 = ListCatalogRulesParam {
-            language: None,
-            category: Some("best-practices".to_string()),
-        };
-
-        assert!(param1.language.is_some());
-        assert!(param1.category.is_none());
-        assert!(param2.language.is_none());
-        assert!(param2.category.is_some());
-    }
-
-    #[test]
-    fn test_import_catalog_rule_result() {
-        let result = ImportCatalogRuleResult {
-            rule_id: "test-rule".to_string(),
-            imported: true,
-            message: "Successfully imported".to_string(),
-        };
-
-        assert_eq!(result.rule_id, "test-rule");
-        assert!(result.imported);
-        assert!(result.message.contains("Successfully"));
     }
 
     #[test]

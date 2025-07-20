@@ -165,55 +165,6 @@ impl ResponseFormatter {
         summary
     }
 
-    /// Format an embedded search result with a readable summary
-    pub fn format_embedded_search_result(result: &EmbeddedSearchResult) -> String {
-        if result.matches.is_empty() {
-            return format!(
-                "🔍 **Embedded Search Results**\n\n❌ **No matches found**\n\n📊 **Summary:**\n- Host Language: {}\n- Embedded Language: {}\n- Total Embedded Blocks: {}\n\nThe pattern did not match anything in the embedded code blocks.",
-                result.host_language, result.embedded_language, result.total_embedded_blocks
-            );
-        }
-
-        let mut summary = format!(
-            "🔍 **Embedded Search Results**\n\n✅ **Found {} matches** in {} embedded blocks\n\n📊 **Summary:**\n- Host Language: {}\n- Embedded Language: {}\n- Total Embedded Blocks: {}\n\n",
-            result.matches.len(),
-            result.total_embedded_blocks,
-            result.host_language,
-            result.embedded_language,
-            result.total_embedded_blocks
-        );
-
-        // Group matches by block for better readability
-        let mut blocks_with_matches: std::collections::HashMap<usize, Vec<&EmbeddedMatchResult>> =
-            std::collections::HashMap::new();
-        for match_result in &result.matches {
-            blocks_with_matches
-                .entry(match_result.embedded_block_index)
-                .or_default()
-                .push(match_result);
-        }
-
-        summary.push_str("🎯 **Matches by Block:**\n");
-        for (block_index, block_matches) in blocks_with_matches.iter() {
-            summary.push_str(&format!(
-                "\n**Block {} ({} matches):**\n",
-                block_index + 1,
-                block_matches.len()
-            ));
-            for (i, match_result) in block_matches.iter().enumerate() {
-                summary.push_str(&format!(
-                    "  {}. Line {}:{} - {}\n",
-                    i + 1,
-                    match_result.start_line,
-                    match_result.start_col,
-                    match_result.text.trim()
-                ));
-            }
-        }
-
-        summary
-    }
-
     /// Format a replace result with a readable summary
     pub fn format_replace_result(result: &ReplaceResult) -> String {
         if result.changes.is_empty() {
@@ -338,11 +289,6 @@ impl ResponseFormatter {
         )
     }
 
-    /// Format a documentation result with a readable summary
-    pub fn format_documentation_result(result: &DocumentationResult) -> String {
-        format!("📚 **AST-Grep Documentation**\n\n{}", result.content)
-    }
-
     /// Format a generate AST result with a readable summary
     pub fn format_generate_ast_result(result: &GenerateAstResult) -> String {
         let mut summary = format!(
@@ -420,54 +366,6 @@ impl ResponseFormatter {
             details
         )
     }
-
-    /// Format suggest patterns result with a readable summary
-    pub fn format_suggest_patterns_result(result: &SuggestPatternsResult) -> String {
-        if result.suggestions.is_empty() {
-            return "🔍 **No pattern suggestions found**\n\nNo patterns could be suggested for the provided code examples.".to_string();
-        }
-
-        let mut summary = format!(
-            "🔍 **Pattern Suggestions**\n\n📊 **Total**: {} suggestions for {} code\n",
-            result.suggestions.len(),
-            result.language
-        );
-
-        // Add pattern details
-        for (i, suggestion) in result.suggestions.iter().enumerate() {
-            summary.push_str(&format!(
-                "\n**Pattern {}**: `{}`\n",
-                i + 1,
-                suggestion.pattern
-            ));
-
-            summary.push_str(&format!(
-                "   📈 **Confidence**: {:.1}%\n",
-                suggestion.confidence * 100.0
-            ));
-
-            summary.push_str(&format!(
-                "   🎯 **Specificity**: {:?}\n",
-                suggestion.specificity
-            ));
-
-            if !suggestion.explanation.is_empty() {
-                summary.push_str(&format!(
-                    "   📝 **Explanation**: {}\n",
-                    suggestion.explanation
-                ));
-            }
-
-            if !suggestion.matching_examples.is_empty() {
-                summary.push_str(&format!(
-                    "   ✅ **Matches examples**: {:?}\n",
-                    suggestion.matching_examples
-                ));
-            }
-        }
-
-        summary
-    }
 }
 
 // Helper trait to convert strings to title case
@@ -495,97 +393,5 @@ impl ToTitleCase for str {
         }
 
         result
-    }
-}
-
-impl ResponseFormatter {
-    /// Format a debug pattern result into a human-readable summary
-    pub fn format_debug_pattern_result(result: &DebugPatternResult) -> String {
-        let mut summary = String::new();
-
-        summary.push_str("🔍 Pattern Debug Analysis\n");
-        summary.push_str(&format!("Pattern: {}\n", result.pattern));
-        summary.push_str(&format!("Language: {}\n", result.language));
-        summary.push_str(&format!("Format: {:?}\n\n", result.format));
-
-        summary.push_str("📊 Analysis Results:\n");
-        summary.push_str(&result.debug_info);
-        summary.push('\n');
-
-        summary.push_str("💡 Explanation:\n");
-        summary.push_str(&result.explanation);
-        summary.push('\n');
-
-        if let Some(ref matches) = result.sample_matches {
-            summary.push_str("\n✅ Sample Code Testing:\n");
-            if matches.is_empty() {
-                summary.push_str("  No matches found in sample code\n");
-            } else {
-                summary.push_str(&format!(
-                    "  Found {} match(es) in sample code:\n",
-                    matches.len()
-                ));
-                for (i, match_result) in matches.iter().take(3).enumerate() {
-                    summary.push_str(&format!("  {}. {}\n", i + 1, match_result.text));
-                }
-                if matches.len() > 3 {
-                    summary.push_str(&format!("  ... and {} more matches\n", matches.len() - 3));
-                }
-            }
-        }
-
-        summary
-    }
-
-    /// Format a debug AST result into a human-readable summary
-    pub fn format_debug_ast_result(result: &DebugAstResult) -> String {
-        let mut summary = String::new();
-
-        summary.push_str("🌳 AST Debug Analysis\n");
-        summary.push_str(&format!("Language: {}\n", result.language));
-        summary.push_str(&format!("Format: {:?}\n", result.format));
-        summary.push_str(&format!(
-            "Code Length: {} characters\n\n",
-            result.code_length
-        ));
-
-        summary.push_str("📊 Tree Statistics:\n");
-        summary.push_str(&format!(
-            "  Total Nodes: {}\n",
-            result.tree_stats.total_nodes
-        ));
-        summary.push_str(&format!("  Leaf Nodes: {}\n", result.tree_stats.leaf_nodes));
-        summary.push_str(&format!("  Max Depth: {}\n", result.tree_stats.max_depth));
-        summary.push_str(&format!(
-            "  Error Nodes: {}\n\n",
-            result.tree_stats.error_nodes
-        ));
-
-        summary.push_str("🏷️ Node Types Found:\n");
-        if result.node_kinds.is_empty() {
-            summary.push_str("  No node types detected\n");
-        } else {
-            for (i, node_kind) in result.node_kinds.iter().take(10).enumerate() {
-                summary.push_str(&format!("  {}. {}\n", i + 1, node_kind));
-            }
-            if result.node_kinds.len() > 10 {
-                summary.push_str(&format!(
-                    "  ... and {} more node types\n",
-                    result.node_kinds.len() - 10
-                ));
-            }
-        }
-
-        summary.push_str("\n🌲 Syntax Tree:\n");
-        // Show first few lines of the tree
-        let tree_lines: Vec<&str> = result.tree.lines().take(20).collect();
-        for line in tree_lines {
-            summary.push_str(&format!("  {line}\n"));
-        }
-        if result.tree.lines().count() > 20 {
-            summary.push_str("  ... (tree truncated, see full JSON response for complete tree)\n");
-        }
-
-        summary
     }
 }

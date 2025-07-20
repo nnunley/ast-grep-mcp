@@ -11,7 +11,6 @@ use crate::types::*;
 
 use rmcp::model::{CallToolRequestParam, CallToolResult, Content, ErrorData};
 use serde::de::DeserializeOwned;
-use serde_json;
 use std::borrow::Cow;
 
 /// Routes tool calls to appropriate service methods
@@ -50,7 +49,6 @@ impl ToolRouter {
             // Search operations
             "search" => Self::handle_search(service, request).await,
             "file_search" => Self::handle_file_search(service, request).await,
-            "search_embedded" => Self::handle_search_embedded(service, request).await,
 
             // Replace operations
             "replace" => Self::handle_replace(service, request).await,
@@ -64,16 +62,9 @@ impl ToolRouter {
             "list_rules" => Self::handle_list_rules(service, request).await,
             "delete_rule" => Self::handle_delete_rule(service, request).await,
             "rule_validate" => Self::handle_rule_validate(service, request).await,
-            "list_catalog_rules" => Self::handle_list_catalog_rules(service, request).await,
-            "import_catalog_rule" => Self::handle_import_catalog_rule(service, request).await,
-
-            // Debug operations
-            "generate_ast" => Self::handle_generate_ast(service, request).await,
-            "debug_pattern" => Self::handle_debug_pattern(service, request).await,
-            "debug_ast" => Self::handle_debug_ast(service, request).await,
 
             // Utility operations
-            "suggest_patterns" => Self::handle_suggest_patterns(service, request).await,
+            "generate_ast" => Self::handle_generate_ast(service, request).await,
             "list_languages" => Self::handle_list_languages(service, request).await,
 
             _ => Err(ErrorData::method_not_found::<
@@ -88,6 +79,29 @@ impl ToolRouter {
         request: CallToolRequestParam,
     ) -> Result<CallToolResult, ErrorData> {
         let param: SearchParam = Self::parse_params(&request)?;
+
+        // Error handling for common LLM misuse patterns
+        if param.code.is_empty() {
+            return Err(ErrorData::invalid_params(
+                Cow::Borrowed(
+                    "The 'search' tool requires the 'code' parameter. If you intend to search across files, please use the 'file_search' tool and provide a 'path_pattern'.",
+                ),
+                None,
+            ));
+        }
+        // Although SearchParam does not have path_pattern, an LLM might mistakenly pass it.
+        // We check raw arguments to provide a more helpful error.
+        if let Some(args) = &request.arguments {
+            if args.contains_key("path_pattern") {
+                return Err(ErrorData::invalid_params(
+                    Cow::Borrowed(
+                        "The 'search' tool operates on code snippets and does not accept 'path_pattern'. If you intend to search across files, please use the 'file_search' tool.",
+                    ),
+                    None,
+                ));
+            }
+        }
+
         let result = service.search(param).await.map_err(ErrorData::from)?;
         let summary = ResponseFormatter::format_search_result(&result);
         Self::create_formatted_response(&result, summary)
@@ -98,21 +112,31 @@ impl ToolRouter {
         request: CallToolRequestParam,
     ) -> Result<CallToolResult, ErrorData> {
         let param: FileSearchParam = Self::parse_params(&request)?;
+
+        // Error handling for common LLM misuse patterns
+        if param.path_pattern.is_empty() {
+            return Err(ErrorData::invalid_params(
+                Cow::Borrowed(
+                    "The 'file_search' tool requires the 'path_pattern' parameter. If you intend to search a code snippet, please use the 'search' tool and provide a 'code' parameter.",
+                ),
+                None,
+            ));
+        }
+        // Although FileSearchParam does not have code, an LLM might mistakenly pass it.
+        // We check raw arguments to provide a more helpful error.
+        if let Some(args) = &request.arguments {
+            if args.contains_key("code") {
+                return Err(ErrorData::invalid_params(
+                    Cow::Borrowed(
+                        "The 'file_search' tool operates on files and does not accept a 'code' parameter. If you intend to search a code snippet, please use the 'search' tool.",
+                    ),
+                    None,
+                ));
+            }
+        }
+
         let result = service.file_search(param).await.map_err(ErrorData::from)?;
         let summary = ResponseFormatter::format_file_search_result(&result);
-        Self::create_formatted_response(&result, summary)
-    }
-
-    async fn handle_search_embedded(
-        service: &AstGrepService,
-        request: CallToolRequestParam,
-    ) -> Result<CallToolResult, ErrorData> {
-        let param: EmbeddedSearchParam = Self::parse_params(&request)?;
-        let result = service
-            .search_embedded(param)
-            .await
-            .map_err(ErrorData::from)?;
-        let summary = ResponseFormatter::format_embedded_search_result(&result);
         Self::create_formatted_response(&result, summary)
     }
 
@@ -122,6 +146,27 @@ impl ToolRouter {
         request: CallToolRequestParam,
     ) -> Result<CallToolResult, ErrorData> {
         let param: ReplaceParam = Self::parse_params(&request)?;
+
+        // Error handling for common LLM misuse patterns
+        if param.code.is_empty() {
+            return Err(ErrorData::invalid_params(
+                Cow::Borrowed(
+                    "The 'replace' tool requires the 'code' parameter. If you intend to replace across files, please use the 'file_replace' tool and provide a 'path_pattern'.",
+                ),
+                None,
+            ));
+        }
+        if let Some(args) = &request.arguments {
+            if args.contains_key("path_pattern") {
+                return Err(ErrorData::invalid_params(
+                    Cow::Borrowed(
+                        "The 'replace' tool operates on code snippets and does not accept 'path_pattern'. If you intend to replace across files, please use the 'file_replace' tool.",
+                    ),
+                    None,
+                ));
+            }
+        }
+
         let result = service.replace(param).await.map_err(ErrorData::from)?;
         let summary = ResponseFormatter::format_replace_result(&result);
         Self::create_formatted_response(&result, summary)
@@ -132,6 +177,36 @@ impl ToolRouter {
         request: CallToolRequestParam,
     ) -> Result<CallToolResult, ErrorData> {
         let param: FileReplaceParam = Self::parse_params(&request)?;
+
+        // Error handling for common LLM misuse patterns
+        if param.path_pattern.is_empty() {
+            return Err(ErrorData::invalid_params(
+                Cow::Borrowed(
+                    "The 'file_replace' tool requires the 'path_pattern' parameter. If you intend to replace a code snippet, please use the 'replace' tool and provide a 'code' parameter.",
+                ),
+                None,
+            ));
+        }
+        if let Some(args) = &request.arguments {
+            if args.contains_key("code") {
+                return Err(ErrorData::invalid_params(
+                    Cow::Borrowed(
+                        "The 'file_replace' tool operates on files and does not accept a 'code' parameter. If you intend to replace a code snippet, please use the 'replace' tool.",
+                    ),
+                    None,
+                ));
+            }
+            // Warn if dry_run is not explicitly set
+            if !args.contains_key("dry_run") {
+                return Err(ErrorData::invalid_params(
+                    Cow::Borrowed(
+                        "For 'file_replace', it is highly recommended to explicitly set 'dry_run' to true or false to confirm your intent. 'dry_run: true' will show changes without applying them, while 'dry_run: false' will apply changes directly to files.",
+                    ),
+                    None,
+                ));
+            }
+        }
+
         let result = service.file_replace(param).await.map_err(ErrorData::from)?;
         let summary = ResponseFormatter::format_file_replace_result(&result);
         Self::create_formatted_response(&result, summary)
@@ -206,30 +281,6 @@ impl ToolRouter {
         Self::create_json_response(result)
     }
 
-    async fn handle_list_catalog_rules(
-        service: &AstGrepService,
-        request: CallToolRequestParam,
-    ) -> Result<CallToolResult, ErrorData> {
-        let param: ListCatalogRulesParam = Self::parse_params(&request)?;
-        let result = service
-            .list_catalog_rules(param)
-            .await
-            .map_err(ErrorData::from)?;
-        Self::create_json_response(result)
-    }
-
-    async fn handle_import_catalog_rule(
-        service: &AstGrepService,
-        request: CallToolRequestParam,
-    ) -> Result<CallToolResult, ErrorData> {
-        let param: ImportCatalogRuleParam = Self::parse_params(&request)?;
-        let result = service
-            .import_catalog_rule(param)
-            .await
-            .map_err(ErrorData::from)?;
-        Self::create_json_response(result)
-    }
-
     // Debug operations
     async fn handle_generate_ast(
         service: &AstGrepService,
@@ -241,47 +292,7 @@ impl ToolRouter {
         Self::create_formatted_response(&result, summary)
     }
 
-    async fn handle_debug_pattern(
-        service: &AstGrepService,
-        request: CallToolRequestParam,
-    ) -> Result<CallToolResult, ErrorData> {
-        let param: DebugPatternParam = Self::parse_params(&request)?;
-        let result = service
-            .debug_service
-            .debug_pattern(param)
-            .await
-            .map_err(ErrorData::from)?;
-        let summary = ResponseFormatter::format_debug_pattern_result(&result);
-        Self::create_formatted_response(&result, summary)
-    }
-
-    async fn handle_debug_ast(
-        service: &AstGrepService,
-        request: CallToolRequestParam,
-    ) -> Result<CallToolResult, ErrorData> {
-        let param: DebugAstParam = Self::parse_params(&request)?;
-        let result = service
-            .debug_service
-            .debug_ast(param)
-            .await
-            .map_err(ErrorData::from)?;
-        let summary = ResponseFormatter::format_debug_ast_result(&result);
-        Self::create_formatted_response(&result, summary)
-    }
-
     // Utility operations
-    async fn handle_suggest_patterns(
-        service: &AstGrepService,
-        request: CallToolRequestParam,
-    ) -> Result<CallToolResult, ErrorData> {
-        let param: SuggestPatternsParam = Self::parse_params(&request)?;
-        let result = service
-            .suggest_patterns(param)
-            .await
-            .map_err(ErrorData::from)?;
-        let summary = ResponseFormatter::format_suggest_patterns_result(&result);
-        Self::create_formatted_response(&result, summary)
-    }
 
     async fn handle_list_languages(
         service: &AstGrepService,

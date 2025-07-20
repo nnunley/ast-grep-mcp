@@ -18,7 +18,7 @@ pub enum ServiceError {
     /// Internal service error with custom message
     Internal(String),
     /// I/O error reading/writing files
-    Io(std::io::Error),
+    FileIoError { message: String, path: String },
     /// Error walking directory trees during file search
     WalkDir(walkdir::Error),
     /// Error parsing YAML rule configurations
@@ -33,6 +33,14 @@ pub enum ServiceError {
     Glob(globset::Error),
     /// MCP tool not found
     ToolNotFound(String),
+    /// Error during AST analysis, includes AST structure for debugging
+    AstAnalysisError {
+        message: String,
+        code: String,
+        language: String,
+        ast_structure: String, // YAML or JSON representation of AST
+        node_kinds: Vec<String>,
+    },
 }
 
 impl fmt::Display for ServiceError {
@@ -40,7 +48,9 @@ impl fmt::Display for ServiceError {
         match self {
             ServiceError::ParserError(msg) => write!(f, "Parser error: {msg}"),
             ServiceError::Internal(msg) => write!(f, "Internal error: {msg}"),
-            ServiceError::Io(err) => write!(f, "IO error: {err}"),
+            ServiceError::FileIoError { message, path } => {
+                write!(f, "File I/O error: {message} at {path}")
+            }
             ServiceError::WalkDir(err) => write!(f, "Directory traversal error: {err}"),
             ServiceError::SerdeYaml(err) => write!(f, "YAML parsing error: {err}"),
             ServiceError::SerdeJson(err) => write!(f, "JSON parsing error: {err}"),
@@ -48,6 +58,23 @@ impl fmt::Display for ServiceError {
             ServiceError::FileNotFound(path) => write!(f, "File not found: {}", path.display()),
             ServiceError::Glob(err) => write!(f, "Glob error: {err}"),
             ServiceError::ToolNotFound(tool) => write!(f, "Tool not found: {tool}"),
+            ServiceError::AstAnalysisError {
+                message,
+                code,
+                language,
+                ast_structure,
+                node_kinds,
+            } => {
+                write!(
+                    f,
+                    "AST Analysis Error: {}\nProblematic Code ({}):\n```\n{}\n```\nAST Structure:\n```yaml\n{}\n```\nAvailable Node Kinds: [{}]",
+                    message,
+                    language,
+                    code,
+                    ast_structure,
+                    node_kinds.join(", ")
+                )
+            }
         }
     }
 }
@@ -56,7 +83,10 @@ impl std::error::Error for ServiceError {}
 
 impl From<std::io::Error> for ServiceError {
     fn from(err: std::io::Error) -> Self {
-        ServiceError::Io(err)
+        ServiceError::FileIoError {
+            message: err.to_string(),
+            path: "".to_string(),
+        }
     }
 }
 
@@ -92,6 +122,23 @@ impl From<globset::Error> for ServiceError {
 
 impl From<ServiceError> for ErrorData {
     fn from(err: ServiceError) -> Self {
-        ErrorData::internal_error(err.to_string(), None)
+        match err {
+            ServiceError::AstAnalysisError {
+                message,
+                code,
+                language,
+                ast_structure,
+                node_kinds,
+            } => {
+                let debug_info = serde_json::json!({
+                    "code": code,
+                    "language": language,
+                    "ast_structure": ast_structure,
+                    "node_kinds": node_kinds,
+                });
+                ErrorData::internal_error(message, Some(debug_info))
+            }
+            _ => ErrorData::internal_error(err.to_string(), None),
+        }
     }
 }

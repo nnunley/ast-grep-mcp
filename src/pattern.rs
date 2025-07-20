@@ -5,13 +5,18 @@
 
 use crate::errors::ServiceError;
 use crate::search_match::SearchMatches;
-use crate::types::MatchResult;
+use crate::types::{CursorResult, FileMatchResult, FileSearchParam, FileSearchResult, MatchResult};
 use ast_grep_core::tree_sitter::StrDoc;
 use ast_grep_core::{AstGrep, Pattern};
 use ast_grep_language::SupportLang as Language;
+use globset::Glob;
 use lru::LruCache;
+use sha2::{Digest, Sha256};
 use std::num::NonZeroUsize;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
+use tokio::fs;
+use walkdir::WalkDir;
 
 #[derive(Clone)]
 pub struct PatternMatcher {
@@ -227,7 +232,12 @@ impl PatternMatcher {
         let mut result = String::new();
 
         // Add node information
-        result.push_str(&format!("{}({})\n", indent, node.kind()));
+        result.push_str(&format!(
+            "{}({})
+",
+            indent,
+            node.kind()
+        ));
 
         // Add children
         for child in node.children() {
@@ -243,13 +253,18 @@ impl PatternMatcher {
         let mut result = String::new();
 
         // Add node information
-        result.push_str(&format!("{}({}", indent, node.kind()));
+        result.push_str(&format!(
+            "{}({})
+",
+            indent,
+            node.kind()
+        ));
 
         // Show text for leaf nodes
         if node.children().count() == 0 {
             let text = node.text();
             if !text.is_empty() {
-                result.push_str(&format!(" \"{}\"", text.replace('\n', "\\n")));
+                result.push_str(&format!(r#" "{}""#, text.replace('\n', "\\n")));
             }
         }
         result.push_str(")\n");
@@ -260,5 +275,94 @@ impl PatternMatcher {
         }
 
         result
+    }
+
+    pub async fn search_files(
+        &self,
+        param: FileSearchParam,
+    ) -> Result<FileSearchResult, ServiceError> {
+        let mut all_matches: Vec<FileMatchResult> = Vec::new();
+        let mut total_files_processed = 0;
+        let mut next_cursor: Option<CursorResult> = None;
+
+        let glob_set = Glob::new(&param.path_pattern)
+            .map_err(ServiceError::Glob)?
+            .compile_matcher();
+
+        let lang = Language::from_str(&param.language)
+            .map_err(|_| ServiceError::Internal("Failed to parse language".to_string()))?;
+
+        let walker = WalkDir::new(".").into_iter();
+
+        for entry_result in walker {
+            let entry = entry_result.map_err(ServiceError::WalkDir)?;
+            let path = entry.path();
+
+            if path.is_file() {
+                total_files_processed += 1;
+
+                if !glob_set.is_match(path.to_string_lossy().as_ref()) {
+                    continue;
+                }
+
+                let file_size = fs::metadata(path)
+                    .await
+                    .map_err(|e| ServiceError::FileIoError {
+                        message: e.to_string(),
+                        path: path.to_string_lossy().into_owned(),
+                    })?
+                    .len();
+
+                if file_size > param.max_file_size {
+                    continue;
+                }
+
+                let content =
+                    fs::read_to_string(path)
+                        .await
+                        .map_err(|e| ServiceError::FileIoError {
+                            message: e.to_string(),
+                            path: path.to_string_lossy().into_owned(),
+                        })?;
+
+                let file_matches = self.search_with_options(
+                    &content,
+                    &param.pattern,
+                    lang,
+                    param.selector.as_deref(),
+                    param.context.as_deref(),
+                )?;
+
+                if !file_matches.is_empty() {
+                    let mut hasher = Sha256::new();
+                    hasher.update(content.as_bytes());
+                    let file_hash = format!("sha256:{}", hex::encode(hasher.finalize()));
+
+                    all_matches.push(FileMatchResult {
+                        file_path: path.to_string_lossy().into_owned(),
+                        file_size_bytes: file_size,
+                        matches: file_matches,
+                        file_hash,
+                    });
+
+                    // Check overall matches count for pagination
+                    let current_total_matches: usize =
+                        all_matches.iter().map(|f| f.matches.len()).sum();
+                    if current_total_matches >= param.max_results {
+                        next_cursor = Some(CursorResult {
+                            last_file_path: path.to_string_lossy().into_owned(),
+                            is_complete: false,
+                        });
+                        break; // Stop searching if max_results reached
+                    }
+                }
+            }
+        }
+
+        Ok(FileSearchResult {
+            matches: all_matches,
+            next_cursor,
+            total_files_found: total_files_processed,
+        })
     }
 }

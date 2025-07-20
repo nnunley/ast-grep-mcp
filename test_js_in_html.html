@@ -1,0 +1,21 @@
+<\!DOCTYPE html>
+<html>
+<head>
+    <title>Test Page</title>
+</head>
+<body>
+    <button onclick="handleClick()">Click me</button>
+    <script>
+        function handleClick() {
+            alert('Button clicked\!');
+        }
+
+        function init() {
+            console.log('Page loaded');
+        }
+
+        window.onload = init;
+    </script>
+</body>
+</html>
+EOF < /dev/null
