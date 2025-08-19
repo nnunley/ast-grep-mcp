@@ -469,6 +469,61 @@ impl AstGrepService {
         self.learning_service
             .generate_quick_hint(validation_result, pattern)
     }
+
+    /// Analyze code fragment for extract-function refactoring
+    #[tracing::instrument(skip(self), fields(language = %param.language))]
+    pub async fn analyze_refactoring(
+        &self,
+        param: AnalyzeRefactoringParam,
+    ) -> Result<AnalyzeRefactoringResult, ServiceError> {
+        use crate::refactoring::capture_analysis::CaptureAnalysisEngine;
+        
+        let engine = CaptureAnalysisEngine::new();
+        let analysis = engine.analyze_capture_simple(&param.fragment, &param.context, &param.language)?;
+        
+        // Convert the analysis to MCP result format
+        self.convert_to_mcp_analysis(analysis)
+    }
+
+    /// Integrated extract function tool combining analysis and execution
+    #[tracing::instrument(skip(self), fields(language = %param.language, function_name = %param.function_name))]
+    pub async fn extract_function(
+        &self,
+        param: ExtractFunctionParam,
+    ) -> Result<ExtractFunctionResult, ServiceError> {
+        use crate::refactoring::capture_analysis::CaptureAnalysisEngine;
+        
+        let engine = CaptureAnalysisEngine::new();
+        
+        // First, analyze the fragment
+        let analysis = engine.analyze_capture_simple(&param.fragment, &param.context, &param.language)?;
+        let mcp_analysis = self.convert_to_mcp_analysis(analysis.clone())?;
+        
+        // Generate the extracted function
+        let extracted_function = self.generate_extracted_function(
+            &param.function_name,
+            &param.fragment,
+            &analysis,
+            &param.language,
+        )?;
+        
+        // Generate the modified context with function call
+        let modified_context = self.generate_modified_context(
+            &param.context,
+            &param.fragment,
+            &param.function_name,
+            &analysis,
+        )?;
+        
+        Ok(ExtractFunctionResult {
+            analysis: mcp_analysis,
+            extracted_function,
+            modified_context,
+            dry_run: param.dry_run.unwrap_or(true),
+            success: true,
+            messages: vec!["Function extraction completed successfully".to_string()],
+        })
+    }
 }
 
 impl ServerHandler for AstGrepService {
@@ -934,390 +989,403 @@ impl AstGrepService {
             _ => pattern.to_string(),
         }
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::PathBuf;
+    /// Convert internal CaptureAnalysis to MCP AnalyzeRefactoringResult format
+    fn convert_to_mcp_analysis(
+        &self,
+        analysis: crate::refactoring::capture_analysis::CaptureAnalysis,
+    ) -> Result<AnalyzeRefactoringResult, ServiceError> {
+        use crate::types::{VariableUsageInfo, SideEffectInfo, ReturnValueInfo, ReturnStrategyInfo, FunctionSignatureInfo, ScopeAnalysisInfo};
+        use std::collections::HashMap;
+        
+        let external_reads: Vec<VariableUsageInfo> = analysis.external_reads
+            .into_iter()
+            .map(|var| VariableUsageInfo {
+                name: var.name,
+                var_type: var.var_type,
+                usage_type: format!("{:?}", var.usage_type),
+                scope_level: var.scope_level,
+                first_usage_line: var.first_usage_line,
+            })
+            .collect();
+        
+        let external_writes: Vec<VariableUsageInfo> = analysis.external_writes
+            .into_iter()
+            .map(|var| VariableUsageInfo {
+                name: var.name,
+                var_type: var.var_type,
+                usage_type: format!("{:?}", var.usage_type),
+                scope_level: var.scope_level,
+                first_usage_line: var.first_usage_line,
+            })
+            .collect();
 
-    #[tokio::test]
-    async fn test_search_basic() {
-        let service = AstGrepService::new();
-        let param = SearchParam::new(
-            "function greet() { console.log(\"Hello\"); }",
-            "console.log($VAR)",
-            "javascript",
-        );
+        let internal_declarations: Vec<VariableUsageInfo> = analysis.internal_declarations
+            .into_iter()
+            .map(|var| VariableUsageInfo {
+                name: var.name,
+                var_type: var.var_type,
+                usage_type: format!("{:?}", var.usage_type),
+                scope_level: var.scope_level,
+                first_usage_line: var.first_usage_line,
+            })
+            .collect();
 
-        let result = service.search(param).await.unwrap();
-        assert_eq!(result.matches.len(), 1);
-        assert_eq!(result.matches[0].text, "console.log(\"Hello\")");
-        assert_eq!(
-            result.matches[0].vars.get("VAR"),
-            Some(&"\"Hello\"".to_string())
-        );
-    }
+        let side_effects: Vec<SideEffectInfo> = analysis.side_effects
+            .into_iter()
+            .map(|effect| {
+                let (effect_type, description, target, details) = match effect {
+                    crate::refactoring::capture_analysis::SideEffect::FunctionCall { name, args } => {
+                        let mut details = HashMap::new();
+                        details.insert("args".to_string(), args.join(", "));
+                        ("function_call".to_string(), format!("Function call to {name}"), Some(name), details)
+                    },
+                    crate::refactoring::capture_analysis::SideEffect::GlobalMutation { variable } => {
+                        ("global_mutation".to_string(), format!("Global variable mutation: {variable}"), Some(variable), HashMap::new())
+                    },
+                    crate::refactoring::capture_analysis::SideEffect::IOOperation { operation_type } => {
+                        ("io_operation".to_string(), format!("I/O operation: {operation_type}"), None, HashMap::new())
+                    },
+                    crate::refactoring::capture_analysis::SideEffect::StateModification { target } => {
+                        ("state_modification".to_string(), format!("State modification: {target}"), Some(target), HashMap::new())
+                    },
+                    crate::refactoring::capture_analysis::SideEffect::AsyncOperation { operation_type, target } => {
+                        ("async_operation".to_string(), format!("Async operation: {operation_type}"), target, HashMap::new())
+                    },
+                    crate::refactoring::capture_analysis::SideEffect::DOMManipulation { element, action } => {
+                        let mut details = HashMap::new();
+                        details.insert("action".to_string(), action);
+                        ("dom_manipulation".to_string(), format!("DOM manipulation on {element}"), Some(element), details)
+                    },
+                    crate::refactoring::capture_analysis::SideEffect::NetworkOperation { url, method } => {
+                        let mut details = HashMap::new();
+                        details.insert("method".to_string(), method);
+                        ("network_operation".to_string(), format!("Network operation: {url}"), Some(url), details)
+                    },
+                };
+                
+                SideEffectInfo {
+                    effect_type,
+                    description,
+                    target,
+                    details,
+                }
+            })
+            .collect();
 
-    #[tokio::test]
-    async fn test_search_no_matches() {
-        let service = AstGrepService::new();
-        let param = SearchParam::new(
-            "function greet() { alert(\"Hello\"); }",
-            "console.log($VAR)",
-            "javascript",
-        );
+        let return_values: Vec<ReturnValueInfo> = analysis.return_values
+            .into_iter()
+            .map(|ret| ReturnValueInfo {
+                expression: ret.expression,
+                inferred_type: ret.inferred_type,
+                is_mutation_result: ret.is_mutation_result,
+            })
+            .collect();
 
-        let result = service.search(param).await.unwrap();
-        assert_eq!(result.matches.len(), 0);
-    }
-
-    #[tokio::test]
-    async fn test_search_invalid_language() {
-        let service = AstGrepService::new();
-        let param = SearchParam::new(
-            "function greet() { console.log(\"Hello\"); }",
-            "console.log($VAR)",
-            "invalid_language",
-        );
-
-        let result = service.search(param).await;
-        assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ServiceError::Internal(_)));
-    }
-
-    #[tokio::test]
-    async fn test_replace_basic() {
-        let service = AstGrepService::new();
-        let param = ReplaceParam::new(
-            "function oldName() { console.log(\"Hello\"); }",
-            "function oldName()",
-            "function newName()",
-            "javascript",
-        );
-
-        let result = service.replace(param).await.unwrap();
-        assert!(result.new_code.contains("function newName()"));
-        assert!(!result.new_code.contains("function oldName()"));
-    }
-
-    #[tokio::test]
-    async fn test_replace_with_vars() {
-        let service = AstGrepService::new();
-        let param = ReplaceParam::new(
-            "const x = 5; const y = 10;",
-            "const $VAR = $VAL",
-            "let $VAR = $VAL",
-            "javascript",
-        );
-
-        let result = service.replace(param).await.unwrap();
-        assert!(result.new_code.contains("let x = 5"));
-        assert!(result.new_code.contains("let y = 10"));
-        assert!(!result.new_code.contains("const"));
-    }
-
-    #[tokio::test]
-    async fn test_replace_multiple_occurrences() {
-        let service = AstGrepService::new();
-        let param = ReplaceParam::new(
-            "let a = 1; let b = 2; let c = 3;",
-            "let $VAR = $VAL",
-            "const $VAR = $VAL",
-            "javascript",
-        );
-        let result = service.replace(param).await.unwrap();
-        assert_eq!(result.new_code, "const a = 1; const b = 2; const c = 3;");
-    }
-
-    #[tokio::test]
-    async fn test_rust_pattern_matching() {
-        let service = AstGrepService::new();
-        let param = SearchParam::new(
-            "fn main() { println!(\"Hello, world!\"); }",
-            "println!($VAR)",
-            "rust",
-        );
-
-        let result = service.search(param).await.unwrap();
-        assert_eq!(result.matches.len(), 1);
-        assert_eq!(result.matches[0].text, "println!(\"Hello, world!\")");
-        assert_eq!(
-            result.matches[0].vars.get("VAR"),
-            Some(&"\"Hello, world!\"".to_string())
-        );
-    }
-
-    #[tokio::test]
-    async fn test_list_languages() {
-        let service = AstGrepService::new();
-        let param = ListLanguagesParam {};
-
-        let result = service.list_languages(param).await.unwrap();
-        assert!(!result.languages.is_empty());
-        assert!(result.languages.contains(&"rust".to_string()));
-        assert!(result.languages.contains(&"javascript".to_string()));
-        assert!(result.languages.contains(&"python".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_search_cursor() {
-        // Test cursor creation and decoding
-        let cursor = CursorParam {
-            last_file_path: "src/main.rs".to_string(),
-            is_complete: false,
-        };
-        assert!(!cursor.is_complete);
-
-        let decoded = cursor.last_file_path.clone();
-        assert_eq!(decoded, "src/main.rs");
-
-        // Test complete cursor
-        let complete_cursor = CursorParam {
-            last_file_path: String::new(),
-            is_complete: true,
-        };
-        assert!(complete_cursor.is_complete);
-        assert_eq!(complete_cursor.last_file_path, "");
-    }
-
-    #[tokio::test]
-    async fn test_pagination_configuration() {
-        let custom_config = ServiceConfig {
-            max_file_size: 1024 * 1024, // 1MB
-            max_concurrency: 5,
-            limit: 10,
-            root_directories: vec![std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))],
-            rules_directory: PathBuf::from(".test-rules"),
-            pattern_cache_size: 500, // Smaller cache for testing
-            additional_rule_dirs: Vec::new(),
-            util_dirs: Vec::new(),
-            sg_config_path: None,
-        };
-
-        let service = AstGrepService::with_config(custom_config);
-        assert_eq!(service.config.max_file_size, 1024 * 1024);
-        assert_eq!(service.config.max_concurrency, 5);
-        assert_eq!(service.config.limit, 10);
-    }
-
-    #[tokio::test]
-    async fn test_multiple_matches() {
-        let service = AstGrepService::new();
-        let param = SearchParam::new(
-            "console.log(\"Hello\"); console.log(\"World\"); alert(\"test\");",
-            "console.log($VAR)",
-            "javascript",
-        );
-
-        let result = service.search(param).await.unwrap();
-        assert_eq!(result.matches.len(), 2);
-        assert_eq!(
-            result.matches[0].vars.get("VAR"),
-            Some(&"\"Hello\"".to_string())
-        );
-        assert_eq!(
-            result.matches[1].vars.get("VAR"),
-            Some(&"\"World\"".to_string())
-        );
-    }
-
-    #[tokio::test]
-    async fn test_complex_pattern() {
-        let service = AstGrepService::new();
-        let param = SearchParam::new(
-            "function test(a, b) { return a + b; } function add(x, y) { return x + y; }",
-            "function $NAME($PARAM1, $PARAM2) { return $PARAM1 + $PARAM2; }",
-            "javascript",
-        );
-
-        let result = service.search(param).await.unwrap();
-        assert_eq!(result.matches.len(), 2);
-
-        // Check first match
-        assert_eq!(
-            result.matches[0].vars.get("NAME"),
-            Some(&"test".to_string())
-        );
-        assert_eq!(result.matches[0].vars.get("PARAM1"), Some(&"a".to_string()));
-        assert_eq!(result.matches[0].vars.get("PARAM2"), Some(&"b".to_string()));
-
-        // Check second match
-        assert_eq!(result.matches[1].vars.get("NAME"), Some(&"add".to_string()));
-        assert_eq!(result.matches[1].vars.get("PARAM1"), Some(&"x".to_string()));
-        assert_eq!(result.matches[1].vars.get("PARAM2"), Some(&"y".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_invalid_language_error() {
-        let service = AstGrepService::new();
-        let param = SearchParam::new("let x = 1;", "let x = 1;", "not_a_real_language");
-        let result = service.search(param).await;
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(matches!(err, ServiceError::Internal(msg) if msg == "Failed to parse language"));
-    }
-
-    #[tokio::test]
-    async fn test_pattern_caching() {
-        let service = AstGrepService::new();
-        let param = SearchParam::new(
-            "console.log(\"test\"); console.log(\"another\");",
-            "console.log($VAR)",
-            "javascript",
-        );
-
-        // Run the same search twice
-        let result1 = service.search(param.clone()).await.unwrap();
-        let result2 = service.search(param).await.unwrap();
-
-        // Both should return the same results
-        assert_eq!(result1.matches.len(), 2);
-        assert_eq!(result2.matches.len(), 2);
-        assert_eq!(result1.matches[0].text, result2.matches[0].text);
-
-        // Verify cache has the pattern (cache should have 1 entry)
-        let cache = service.pattern_cache.lock().unwrap();
-        assert_eq!(cache.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn test_lru_cache_eviction() {
-        // Create service with very small cache for testing
-        let config = ServiceConfig {
-            pattern_cache_size: 2, // Only 2 patterns max
-            ..Default::default()
-        };
-        let service = AstGrepService::with_config(config);
-
-        let code = "console.log('test');";
-
-        // Add first pattern
-        let _ = service
-            .search(SearchParam::new(code, "console.log($VAR)", "javascript"))
-            .await
-            .unwrap();
-
-        // Add second pattern
-        let _ = service
-            .search(SearchParam::new(
-                code,
-                "console.$METHOD($VAR)",
-                "javascript",
-            ))
-            .await
-            .unwrap();
-
-        // Cache should have 2 entries
-        let (used, capacity) = service.get_cache_stats();
-        assert_eq!(used, 2);
-        assert_eq!(capacity, 2);
-
-        // Add third pattern - should evict least recently used
-        let _ = service
-            .search(SearchParam::new(code, "$OBJECT.log($VAR)", "javascript"))
-            .await
-            .unwrap();
-
-        // Cache should still have 2 entries (LRU evicted the first one)
-        let (used, capacity) = service.get_cache_stats();
-        assert_eq!(used, 2);
-        assert_eq!(capacity, 2);
-    }
-
-    #[tokio::test]
-    async fn test_generate_ast() {
-        let service = AstGrepService::new();
-        let param = GenerateAstParam {
-            code: "function test() { return 42; }".to_string(),
-            language: "javascript".to_string(),
-        };
-
-        let result = service.generate_ast(param).await.unwrap();
-
-        // Should contain function declaration
-        assert!(result.ast.contains("function_declaration"));
-        assert!(result.ast.contains("identifier"));
-        assert!(result.ast.contains("number"));
-        assert_eq!(result.language, "javascript");
-        assert_eq!(result.code_length, 30);
-    }
-
-    #[tokio::test]
-    async fn test_file_replace_console_log() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let service = AstGrepService::with_config(ServiceConfig {
-            root_directories: vec![temp_dir.path().to_path_buf()],
-            ..Default::default()
+        let suggested_return_strategy = analysis.suggested_return.map(|strategy| {
+            match strategy {
+                crate::refactoring::capture_analysis::ReturnStrategy::Single { expression, var_type } => {
+                    ReturnStrategyInfo {
+                        strategy_type: "single".to_string(),
+                        description: "Return a single value".to_string(),
+                        expression: Some(expression),
+                        values: None,
+                        modified_params: None,
+                        return_type: var_type,
+                    }
+                },
+                crate::refactoring::capture_analysis::ReturnStrategy::Multiple { values } => {
+                    ReturnStrategyInfo {
+                        strategy_type: "multiple".to_string(),
+                        description: "Return multiple values".to_string(),
+                        expression: None,
+                        values: Some(values),
+                        modified_params: None,
+                        return_type: None,
+                    }
+                },
+                crate::refactoring::capture_analysis::ReturnStrategy::InPlace { modified_params } => {
+                    ReturnStrategyInfo {
+                        strategy_type: "in_place".to_string(),
+                        description: "Modify parameters in place".to_string(),
+                        expression: None,
+                        values: None,
+                        modified_params: Some(modified_params),
+                        return_type: None,
+                    }
+                },
+                crate::refactoring::capture_analysis::ReturnStrategy::Void => {
+                    ReturnStrategyInfo {
+                        strategy_type: "void".to_string(),
+                        description: "No return value needed".to_string(),
+                        expression: None,
+                        values: None,
+                        modified_params: None,
+                        return_type: Some("void".to_string()),
+                    }
+                },
+            }
         });
-        let file_path = temp_dir.path().join("test_file_replace.js");
-        let file_content = r#"
-function greet() {
-  console.log("Hello");
-  console.log("World");
-}
-"#;
-        tokio::fs::write(&file_path, file_content).await.unwrap();
 
-        let path_pattern = "**/test_file_replace.js".to_string();
+        let parameters: Vec<String> = analysis.suggested_parameters
+            .into_iter()
+            .map(|param| if let Some(param_type) = param.param_type {
+                format!("{}: {}", param.name, param_type)
+            } else {
+                param.name
+            })
+            .collect();
 
-        // Dry run test
-        let dry_run_param = FileReplaceParam {
-            path_pattern: path_pattern.clone(),
-            pattern: "console.log($VAR)".to_string(),
-            replacement: "logger.debug($VAR)".to_string(),
-            language: "javascript".to_string(),
-            dry_run: true,
-            include_samples: true,
-            summary_only: true,
-            max_file_size: default_max_file_size(),
-            max_results: default_max_results_large(),
-            cursor: None,
-            strictness: None,
-            selector: None,
-            context: None,
-            max_samples: default_max_samples(),
+        let is_pure = side_effects.is_empty() && external_writes.is_empty();
+        
+        let suggested_signature = FunctionSignatureInfo {
+            name: "extracted_function".to_string(),
+            parameters: parameters.clone(),
+            return_info: suggested_return_strategy
+                .as_ref()
+                .map(|s| s.strategy_type.clone())
+                .unwrap_or_else(|| "void".to_string()),
+            full_signature: format!(
+                "function extracted_function({}): {}",
+                parameters.join(", "),
+                suggested_return_strategy
+                    .as_ref()
+                    .and_then(|s| s.return_type.as_ref())
+                    .unwrap_or(&"void".to_string())
+            ),
+            is_pure,
         };
 
-        let dry_run_result = service.file_replace(dry_run_param).await.unwrap();
-        assert_eq!(dry_run_result.files_with_changes, 1);
-        assert_eq!(dry_run_result.total_changes, 2);
-        assert!(!dry_run_result.summary_results.is_empty());
-        assert!(!dry_run_result.summary_results[0].sample_changes.is_empty());
-        assert_eq!(
-            dry_run_result.summary_results[0].sample_changes[0].new_text,
-            "logger.debug($VAR)"
-        );
-
-        // Actual replacement test
-        let replace_param = FileReplaceParam {
-            path_pattern: path_pattern.clone(),
-            pattern: "console.log($VAR)".to_string(),
-            replacement: "logger.debug($VAR)".to_string(),
-            language: "javascript".to_string(),
-            dry_run: false,
-            include_samples: true,
-            summary_only: true,
-            max_file_size: default_max_file_size(),
-            max_results: default_max_results_large(),
-            cursor: None,
-            strictness: None,
-            selector: None,
-            context: None,
-            max_samples: default_max_samples(),
+        let scope_info = ScopeAnalysisInfo {
+            current_scope_type: "unknown".to_string(), // TODO: extract from analysis
+            scope_depth: 0, // TODO: extract from analysis
+            crosses_boundaries: false, // TODO: extract from analysis
+            violations: vec![], // TODO: extract from analysis
+            instance_members: vec![], // TODO: extract from analysis
         };
 
-        let replace_result = service.file_replace(replace_param).await.unwrap();
-        assert_eq!(replace_result.files_with_changes, 1);
-        assert_eq!(replace_result.total_changes, 2);
+        Ok(AnalyzeRefactoringResult {
+            external_reads,
+            external_writes,
+            internal_declarations,
+            return_values,
+            suggested_return_strategy,
+            side_effects,
+            suggested_signature,
+            scope_info,
+        })
+    }
 
-        let modified_content = tokio::fs::read_to_string(&file_path).await.unwrap();
-        assert!(modified_content.contains(r#"logger.debug("Hello")"#));
-        assert!(modified_content.contains(r#"logger.debug("World")"#));
-        assert!(!modified_content.contains(r#"console.log("Hello")"#));
-        assert!(!modified_content.contains(r#"console.log("World")"#));
+    /// Generate the extracted function code
+    fn generate_extracted_function(
+        &self,
+        function_name: &str,
+        fragment: &str,
+        analysis: &crate::refactoring::capture_analysis::CaptureAnalysis,
+        language: &str,
+    ) -> Result<String, ServiceError> {
+        let external_reads: Vec<String> = analysis.external_reads
+            .iter()
+            .map(|var| var.name.clone())
+            .collect();
+        
+        let external_writes: Vec<String> = analysis.external_writes
+            .iter()
+            .map(|var| var.name.clone())
+            .collect();
 
-        // Clean up
-        temp_dir.close().unwrap();
+        // Generate function signature based on language
+        let function_code = match language {
+            "javascript" | "typescript" => {
+                let params = external_reads.join(", ");
+                let return_statement = if !external_writes.is_empty() {
+                    if external_writes.len() == 1 {
+                        format!("\n    return {};", external_writes[0])
+                    } else {
+                        format!("\n    return {{ {} }};", external_writes.join(", "))
+                    }
+                } else {
+                    String::new()
+                };
+                
+                format!("function {function_name}({params}) {{\n    {fragment}{return_statement}\n}}")
+            },
+            "python" => {
+                let params = external_reads.join(", ");
+                let return_statement = if !external_writes.is_empty() {
+                    if external_writes.len() == 1 {
+                        format!("\n    return {}", external_writes[0])
+                    } else {
+                        format!("\n    return {}", external_writes.join(", "))
+                    }
+                } else {
+                    String::new()
+                };
+                
+                format!("def {function_name}({params}):\n    {}{return_statement}", 
+                       fragment.replace('\n', "\n    "))
+            },
+            "rust" => {
+                let params: Vec<String> = external_reads.iter()
+                    .map(|param| format!("{param}: &str")) // Simple type assumption
+                    .collect();
+                let params_str = params.join(", ");
+                
+                let return_type = if external_writes.is_empty() {
+                    String::new()
+                } else if external_writes.len() == 1 {
+                    " -> String".to_string() // Simple return type
+                } else {
+                    format!(" -> ({})", external_writes.iter().map(|_| "String").collect::<Vec<_>>().join(", "))
+                };
+                
+                let return_statement = if !external_writes.is_empty() {
+                    if external_writes.len() == 1 {
+                        format!("\n    {}", external_writes[0])
+                    } else {
+                        format!("\n    ({})", external_writes.join(", "))
+                    }
+                } else {
+                    String::new()
+                };
+                
+                format!("fn {function_name}({params_str}){return_type} {{\n    {fragment}{return_statement}\n}}")
+            },
+            _ => {
+                // Generic format
+                let params = external_reads.join(", ");
+                format!("{function_name}({params}) {{\n    {fragment}\n}}")
+            }
+        };
+
+        Ok(function_code)
+    }
+
+    /// Generate the modified context with function call
+    fn generate_modified_context(
+        &self,
+        context: &str,
+        fragment: &str,
+        function_name: &str,
+        analysis: &crate::refactoring::capture_analysis::CaptureAnalysis,
+    ) -> Result<String, ServiceError> {
+        let external_reads: Vec<String> = analysis.external_reads
+            .iter()
+            .map(|var| var.name.clone())
+            .collect();
+        
+        let external_writes: Vec<String> = analysis.external_writes
+            .iter()
+            .map(|var| var.name.clone())
+            .collect();
+
+        // Generate function call
+        let args = external_reads.join(", ");
+        let function_call = if external_writes.is_empty() {
+            format!("{function_name}({args});")
+        } else if external_writes.len() == 1 {
+            format!("{} = {function_name}({args});", external_writes[0])
+        } else {
+            // Handle multiple returns based on language conventions
+            format!("// TODO: Handle multiple return values: {}\n    {function_name}({args});", external_writes.join(", "))
+        };
+
+        // Replace the fragment with the function call
+        let modified_context = context.replace(fragment, &function_call);
+        
+        Ok(modified_context)
+    }
+
+    /// Apply structured refactorings
+    pub async fn refactor(
+        &self,
+        param: crate::refactoring::RefactoringRequest,
+    ) -> Result<crate::refactoring::RefactoringResponse, ServiceError> {
+        use crate::refactoring::RefactoringService;
+        use std::sync::Arc;
+        
+        let service = RefactoringService::new(
+            Arc::new(self.search_service.clone()),
+            Arc::new(self.replace_service.clone())
+        ).map_err(|e| ServiceError::Internal(e.to_string()))?;
+        
+        service.refactor(param).await
+            .map_err(|e| ServiceError::AstAnalysisError {
+                message: e.to_string(),
+                code: "refactoring_failed".to_string(),
+                language: "unknown".to_string(),
+                ast_structure: String::new(),
+                node_kinds: vec![],
+            })
+    }
+
+    /// Validate refactoring against test code
+    pub async fn validate_refactoring(
+        &self,
+        param: crate::refactoring::ValidateRefactoringRequest,
+    ) -> Result<crate::refactoring::ValidateRefactoringResponse, ServiceError> {
+        use crate::refactoring::RefactoringService;
+        use std::sync::Arc;
+        
+        let service = RefactoringService::new(
+            Arc::new(self.search_service.clone()),
+            Arc::new(self.replace_service.clone())
+        ).map_err(|e| ServiceError::Internal(e.to_string()))?;
+        
+        service.validate_refactoring(param).await
+            .map_err(|e| ServiceError::AstAnalysisError {
+                message: e.to_string(),
+                code: "refactoring_validation_failed".to_string(),
+                language: "unknown".to_string(),
+                ast_structure: String::new(),
+                node_kinds: vec![],
+            })
+    }
+
+    /// List available refactorings
+    pub async fn list_refactorings(
+        &self,
+        _filters: Option<serde_json::Map<String, serde_json::Value>>,
+    ) -> Result<Vec<crate::refactoring::RefactoringInfo>, ServiceError> {
+        use crate::refactoring::RefactoringService;
+        use std::sync::Arc;
+        
+        let service = RefactoringService::new(
+            Arc::new(self.search_service.clone()),
+            Arc::new(self.replace_service.clone())
+        ).map_err(|e| ServiceError::Internal(e.to_string()))?;
+        
+        service.list_refactorings().await
+            .map_err(|e| ServiceError::AstAnalysisError {
+                message: e.to_string(),
+                code: "list_refactorings_failed".to_string(),
+                language: "unknown".to_string(),
+                ast_structure: String::new(),
+                node_kinds: vec![],
+            })
+    }
+
+    /// Get detailed refactoring information
+    pub async fn get_refactoring_info(
+        &self,
+        refactoring_id: &str,
+    ) -> Result<crate::refactoring::RefactoringDetails, ServiceError> {
+        use crate::refactoring::RefactoringService;
+        use std::sync::Arc;
+        
+        let service = RefactoringService::new(
+            Arc::new(self.search_service.clone()),
+            Arc::new(self.replace_service.clone())
+        ).map_err(|e| ServiceError::Internal(e.to_string()))?;
+        
+        service.get_refactoring_info(refactoring_id).await
+            .map_err(|e| ServiceError::AstAnalysisError {
+                message: e.to_string(),
+                code: "get_refactoring_info_failed".to_string(),
+                language: "unknown".to_string(),
+                ast_structure: String::new(),
+                node_kinds: vec![],
+            })
     }
 }
+

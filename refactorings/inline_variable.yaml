@@ -1,0 +1,265 @@
+# Inline Variable Refactoring
+# Replace variable references with its value
+
+id: inline_variable
+name: Inline Variable
+category: composing_methods
+description: Replace variable references with its value
+supported_languages: 
+  - javascript
+  - typescript
+  - python
+  - rust
+  - go
+  - java
+complexity: simple
+
+# Main pattern for variable inlining
+pattern:
+  match: |
+    $DECL = $VALUE;
+    $$$
+    $USAGE
+  constraints:
+    - follows:
+        declaration: "$DECL"
+    - uses:
+        identifier: "$DECL"
+    - single_assignment:
+        identifier: "$DECL"
+
+transform:
+  replace: |
+    $$$
+    $VALUE
+
+# variables:
+#   extract_from_pattern:
+#     - $DECL
+#     - $VALUE
+#     - $USAGE
+#   parameters: "none"
+#   return_values: "none"
+
+# Variants for specific language patterns
+variants:
+  # Inline const/let variables in JavaScript/TypeScript
+  - id: inline_const_variable
+    pattern:
+      match: |
+        const $DECL = $VALUE;
+        $$$
+        $USAGE
+      constraints:
+        - kind:
+            kinds: ["variable_declarator"]
+        - uses:
+            identifier: "$DECL"
+        - single_assignment:
+            identifier: "$DECL"
+    transform:
+      replace: |
+        $$$
+        $VALUE
+
+  # Inline let variables with reassignment check
+  - id: inline_let_variable
+    pattern:
+      match: |
+        let $DECL = $VALUE;
+        $$$
+        $USAGE
+      constraints:
+        - kind:
+            kinds: ["variable_declarator"]
+        - uses:
+            identifier: "$DECL"
+        - single_assignment:
+            identifier: "$DECL"
+    transform:
+      replace: |
+        $$$
+        $VALUE
+
+  # Inline local variables in Python
+  - id: inline_python_variable
+    pattern:
+      match: |
+        $DECL = $VALUE
+        $$$
+        $USAGE
+      constraints:
+        - uses:
+            identifier: "$DECL"
+        - single_assignment:
+            identifier: "$DECL"
+    transform:
+      replace: |
+        $$$
+        $VALUE
+
+  # Inline let bindings in Rust
+  - id: inline_rust_variable
+    pattern:
+      match: |
+        let $DECL = $VALUE;
+        $$$
+        $USAGE
+      constraints:
+        - uses:
+            identifier: "$DECL"
+        - single_assignment:
+            identifier: "$DECL"
+    transform:
+      replace: |
+        $$$
+        $VALUE
+
+  # Inline short variable declarations in Go
+  - id: inline_go_variable
+    pattern:
+      match: |
+        $DECL := $VALUE
+        $$$
+        $USAGE
+      constraints:
+        - uses:
+            identifier: "$DECL"
+        - single_assignment:
+            identifier: "$DECL"
+    transform:
+      replace: |
+        $$$
+        $VALUE
+
+  # Inline final variables in Java
+  - id: inline_java_variable
+    pattern:
+      match: |
+        final $TYPE $DECL = $VALUE;
+        $$$
+        $USAGE
+      constraints:
+        - uses:
+            identifier: "$DECL"
+        - single_assignment:
+            identifier: "$DECL"
+    transform:
+      replace: |
+        $$$
+        $VALUE
+
+# Language-specific configurations
+language_config:
+  javascript:
+    variable_patterns: ["const", "let", "var"]
+    scope_analysis: "lexical"
+    side_effect_check: true
+  
+  typescript:
+    variable_patterns: ["const", "let", "var"]
+    scope_analysis: "lexical"
+    type_preservation: true
+    side_effect_check: true
+  
+  python:
+    variable_patterns: ["assignment"]
+    scope_analysis: "lexical"
+    indentation_aware: true
+  
+  rust:
+    variable_patterns: ["let", "let mut"]
+    scope_analysis: "lexical"
+    ownership_check: true
+    mutability_check: true
+  
+  go:
+    variable_patterns: [":=", "var"]
+    scope_analysis: "block"
+    short_declaration: true
+  
+  java:
+    variable_patterns: ["final", "var", "type"]
+    scope_analysis: "block"
+    final_check: true
+
+# Preconditions to check before applying
+preconditions:
+  - !no_side_effects_in
+    expression: $VALUE
+  - !valid_scope
+    pattern: $USAGE
+  - !unique_name
+    name: $DECL
+
+# Examples for documentation
+examples:
+  - description: "Inline simple variable assignment"
+    before: |
+      const maxRetries = 3;
+      if (retryCount < maxRetries) {
+        retry();
+      }
+    after: |
+      if (retryCount < 3) {
+        retry();
+      }
+  
+  - description: "Inline calculated value"
+    before: |
+      const discountedPrice = price * 0.9;
+      return discountedPrice;
+    after: |
+      return price * 0.9;
+  
+  - description: "Inline string concatenation"
+    before: |
+      const fullName = firstName + ' ' + lastName;
+      console.log(fullName);
+    after: |
+      console.log(firstName + ' ' + lastName);
+  
+  - description: "Inline function call result"
+    before: |
+      const isValid = validateInput(data);
+      if (isValid) {
+        processData(data);
+      }
+    after: |
+      if (validateInput(data)) {
+        processData(data);
+      }
+  
+  - description: "Inline object property access"
+    before: |
+      const userId = user.id;
+      updateUser(userId);
+    after: |
+      updateUser(user.id);
+  
+  - description: "Python variable inlining"
+    before: |
+      max_attempts = 5
+      if attempts < max_attempts:
+          retry()
+    after: |
+      if attempts < 5:
+          retry()
+  
+  - description: "Rust let binding inlining"
+    before: |
+      let threshold = 100;
+      if value > threshold {
+          process(value);
+      }
+    after: |
+      if value > 100 {
+          process(value);
+      }
+  
+  - description: "Go short variable declaration inlining"
+    before: |
+      timeout := 30 * time.Second
+      ctx, cancel := context.WithTimeout(context.Background(), timeout)
+    after: |
+      ctx, cancel := context.WithTimeout(context.Background(), 30 * time.Second)

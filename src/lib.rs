@@ -59,6 +59,7 @@ pub mod language_injection;
 pub mod learning;
 pub mod path_validation;
 pub mod pattern;
+pub mod refactoring;
 pub mod replace;
 pub mod response_formatter;
 pub mod rules;

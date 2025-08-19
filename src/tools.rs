@@ -266,6 +266,103 @@ impl ToolService {
                     })).unwrap()),
                     annotations: None,
                 },
+                Tool {
+                    name: "analyze_refactoring".into(),
+                    description: Some("Analyze code fragments for extract-function refactoring potential. Performs comprehensive dependency analysis including variable capture, return value inference, side effect detection, and generates suggested function signatures. Essential for safe code extraction and refactoring planning.".into()),
+                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "fragment": { "type": "string", "description": "Code fragment to analyze for extraction (the code you want to extract into a function)" },
+                            "context": { "type": "string", "description": "Full context code containing the fragment (the complete function/method/class where the fragment appears)" },
+                            "language": { "type": "string", "description": "Programming language (javascript, typescript, python, rust, java, go, etc.)" }
+                        },
+                        "required": ["fragment", "context", "language"]
+                    })).unwrap()),
+                    annotations: None,
+                },
+                Tool {
+                    name: "extract_function".into(),
+                    description: Some("Integrated extract function tool that analyzes code fragments and generates both the extracted function and modified calling code. Performs comprehensive dependency analysis, return value inference, and side effect detection in one operation. More practical than separate analyze + manual refactor workflow.".into()),
+                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "fragment": { "type": "string", "description": "Code fragment to extract into a function (the code you want to extract)" },
+                            "context": { "type": "string", "description": "Full context code containing the fragment (complete function/method/class where fragment appears)" },
+                            "language": { "type": "string", "description": "Programming language (javascript, typescript, python, rust, java, go, etc.)" },
+                            "function_name": { "type": "string", "description": "Name for the extracted function" },
+                            "dry_run": { "type": "boolean", "default": true, "description": "Whether to preview changes only (default: true)" },
+                            "path_pattern": { "type": "string", "description": "Path pattern for file operations (optional, for future file-based operations)" }
+                        },
+                        "required": ["fragment", "context", "language", "function_name"]
+                    })).unwrap()),
+                    annotations: None,
+                },
+                Tool {
+                    name: "refactor".into(),
+                    description: Some("Apply structured refactorings like extract method, rename symbol, extract variable, etc. Provides intelligent code transformations beyond simple find-replace. Use 'list_refactorings' to see available refactoring types.".into()),
+                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "refactoring_id": { "type": "string", "description": "ID of the refactoring to apply (e.g., 'extract_method', 'rename_symbol', 'extract_variable')" },
+                            "pattern_example": { "type": "string", "description": "Optional: override the default pattern with a specific code example to match" },
+                            "options": {
+                                "type": "object",
+                                "properties": {
+                                    "function_name": { "type": "string", "description": "Name for extracted function/method (required for extract_method)" },
+                                    "variable_name": { "type": "string", "description": "Name for extracted variable (required for extract_variable)" },
+                                    "class_name": { "type": "string", "description": "Name for extracted class (required for extract_class)" },
+                                    "new_name": { "type": "string", "description": "New name for symbol (required for rename_symbol)" },
+                                    "scope": { "type": "string", "enum": ["file", "directory", "project"], "default": "file", "description": "Scope of refactoring operation" },
+                                    "preview": { "type": "boolean", "default": true, "description": "Preview changes without applying them" },
+                                    "max_matches": { "type": "integer", "default": 1000, "description": "Maximum number of matches to process" },
+                                    "path_pattern": { "type": "string", "description": "Glob pattern for files to refactor (e.g., 'src/**/*.js')" },
+                                    "language": { "type": "string", "description": "Programming language (required)" }
+                                }
+                            }
+                        },
+                        "required": ["refactoring_id"]
+                    })).unwrap()),
+                    annotations: None,
+                },
+                Tool {
+                    name: "validate_refactoring".into(),
+                    description: Some("Validate a refactoring pattern against test code before applying it. Tests whether the refactoring would match and shows expected transformations. Use this to verify refactoring behavior before applying to real code.".into()),
+                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "refactoring_id": { "type": "string", "description": "ID of the refactoring to validate" },
+                            "test_code": { "type": "string", "description": "Sample code to test the refactoring pattern against" },
+                            "language": { "type": "string", "description": "Programming language of the test code" },
+                            "custom_pattern": { "type": "string", "description": "Optional: custom pattern to test instead of the default" }
+                        },
+                        "required": ["refactoring_id", "test_code", "language"]
+                    })).unwrap()),
+                    annotations: None,
+                },
+                Tool {
+                    name: "list_refactorings".into(),
+                    description: Some("List all available refactoring types with their descriptions and supported languages. Shows refactorings organized by category (e.g., composing methods, organizing data, simplifying conditionals).".into()),
+                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "language": { "type": "string", "description": "Filter refactorings by programming language" },
+                            "category": { "type": "string", "description": "Filter by category (composing_methods, organizing_data, simplifying_conditionals, organizing_code)" }
+                        }
+                    })).unwrap()),
+                    annotations: None,
+                },
+                Tool {
+                    name: "get_refactoring_info".into(),
+                    description: Some("Get detailed information about a specific refactoring, including its pattern, required options, preconditions, and examples. Use this to understand how a refactoring works before applying it.".into()),
+                    input_schema: Arc::new(serde_json::from_value(serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "refactoring_id": { "type": "string", "description": "ID of the refactoring to get information about" }
+                        },
+                        "required": ["refactoring_id"]
+                    })).unwrap()),
+                    annotations: None,
+                },
             ],
             ..Default::default()
         }

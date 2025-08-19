@@ -623,6 +623,174 @@ pub struct GenerateAstResult {
     pub node_kinds: Vec<String>,
 }
 
+/// Parameters for analyzing code fragments for refactoring potential.
+///
+/// This tool provides comprehensive analysis for extract-function refactoring,
+/// including variable dependency analysis, return value inference, and side effect detection.
+///
+/// # Usage
+///
+/// ```json
+/// {
+///     "fragment": "let sum = x + y; console.log(sum);",
+///     "context": "function calculate() { let x = 5; let y = 10; let sum = x + y; console.log(sum); return sum; }",
+///     "language": "javascript"
+/// }
+/// ```
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AnalyzeRefactoringParam {
+    /// The code fragment to analyze for extraction
+    pub fragment: String,
+    /// The full context code containing the fragment
+    pub context: String,
+    /// Programming language for parsing
+    pub language: String,
+}
+
+/// Result of refactoring analysis containing comprehensive extraction insights.
+///
+/// Provides all information needed to perform safe extract-function refactoring,
+/// including parameter requirements, return strategy, and potential side effects.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AnalyzeRefactoringResult {
+    /// Variables that need to be passed as parameters
+    pub external_reads: Vec<VariableUsageInfo>,
+    /// Variables modified by the fragment
+    pub external_writes: Vec<VariableUsageInfo>,
+    /// Variables declared within the fragment
+    pub internal_declarations: Vec<VariableUsageInfo>,
+    /// Detected return values
+    pub return_values: Vec<ReturnValueInfo>,
+    /// Recommended return strategy
+    pub suggested_return_strategy: Option<ReturnStrategyInfo>,
+    /// Side effects detected in the fragment
+    pub side_effects: Vec<SideEffectInfo>,
+    /// Suggested function signature
+    pub suggested_signature: FunctionSignatureInfo,
+    /// Scope analysis information
+    pub scope_info: ScopeAnalysisInfo,
+}
+
+/// Parameters for the integrated extract_function tool
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ExtractFunctionParam {
+    /// Code fragment to extract into a function
+    pub fragment: String,
+    /// Full context code containing the fragment
+    pub context: String,
+    /// Programming language
+    pub language: String,
+    /// Name for the extracted function
+    pub function_name: String,
+    /// Whether to preview changes only (default: true)
+    pub dry_run: Option<bool>,
+    /// Path pattern for file operations (when working with files)
+    pub path_pattern: Option<String>,
+}
+
+/// Result of the integrated extract_function operation
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ExtractFunctionResult {
+    /// Analysis results from the fragment
+    pub analysis: AnalyzeRefactoringResult,
+    /// The generated extracted function code
+    pub extracted_function: String,
+    /// The modified original code with function call
+    pub modified_context: String,
+    /// Whether this was a dry run
+    pub dry_run: bool,
+    /// Success/failure status
+    pub success: bool,
+    /// Any warnings or notes
+    pub messages: Vec<String>,
+}
+
+/// Information about variable usage in the analyzed fragment
+#[derive(Debug, Serialize, Deserialize)]
+pub struct VariableUsageInfo {
+    /// Variable name
+    pub name: String,
+    /// Inferred or explicit type (if available)
+    pub var_type: Option<String>,
+    /// How the variable is used (read, write, declaration)
+    pub usage_type: String,
+    /// Scope level where the variable is accessible
+    pub scope_level: usize,
+    /// Line number of first usage
+    pub first_usage_line: usize,
+}
+
+/// Information about return values detected in the fragment
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ReturnValueInfo {
+    /// The return expression
+    pub expression: String,
+    /// Inferred type of the return value
+    pub inferred_type: Option<String>,
+    /// Whether this return is the result of a mutation
+    pub is_mutation_result: bool,
+}
+
+/// Recommended return strategy for the extracted function
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ReturnStrategyInfo {
+    /// Type of return strategy
+    pub strategy_type: String, // "single", "multiple", "in_place", "void"
+    /// Description of the strategy
+    pub description: String,
+    /// Specific return expression (for single returns)
+    pub expression: Option<String>,
+    /// Multiple return values (for multiple returns)
+    pub values: Option<Vec<String>>,
+    /// Parameters that will be modified in place
+    pub modified_params: Option<Vec<String>>,
+    /// Inferred return type
+    pub return_type: Option<String>,
+}
+
+/// Information about side effects detected in the fragment
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SideEffectInfo {
+    /// Type of side effect
+    pub effect_type: String, // "function_call", "global_mutation", "io_operation", "async_operation", "dom_manipulation", "network_operation"
+    /// Description of the side effect
+    pub description: String,
+    /// Target of the side effect (function name, variable, etc.)
+    pub target: Option<String>,
+    /// Additional details specific to the side effect type
+    pub details: HashMap<String, String>,
+}
+
+/// Suggested function signature for the extracted code
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FunctionSignatureInfo {
+    /// Suggested function name
+    pub name: String,
+    /// Parameter list
+    pub parameters: Vec<String>,
+    /// Return type information
+    pub return_info: String,
+    /// Complete function signature
+    pub full_signature: String,
+    /// Whether the function is pure (no side effects)
+    pub is_pure: bool,
+}
+
+/// Scope analysis information for the fragment
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ScopeAnalysisInfo {
+    /// Current scope type
+    pub current_scope_type: String,
+    /// Scope depth
+    pub scope_depth: usize,
+    /// Whether the fragment crosses scope boundaries
+    pub crosses_boundaries: bool,
+    /// Any scope violations detected
+    pub violations: Vec<String>,
+    /// Instance members accessed (for class contexts)
+    pub instance_members: Vec<String>,
+}
+
 // Default functions for serde deserialization
 
 /// Default maximum results for search operations (20)

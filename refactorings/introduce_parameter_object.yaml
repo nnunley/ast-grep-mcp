@@ -1,0 +1,258 @@
+# Introduce Parameter Object Refactoring
+# Replace multiple parameters with a single object parameter
+
+id: introduce_parameter_object
+name: Introduce Parameter Object
+category: organizing_data
+description: Replace multiple parameters with a single object parameter to reduce parameter coupling
+supported_languages: 
+  - javascript
+  - typescript
+  - python
+complexity: moderate
+
+# Main pattern for functions with multiple parameters
+pattern:
+  match: |
+    function $FUNC($PARAM1, $PARAM2, $PARAM3, $$$MORE_PARAMS) {
+      $$$BODY
+    }
+  constraints:
+    - min_params:
+        count: 4
+
+transform:
+  replace: |
+    function $FUNC($PARAM_OBJECT) {
+      const { $PARAM1, $PARAM2, $PARAM3 } = $PARAM_OBJECT;
+      $$$BODY
+    }
+  update_calls:
+    match: |
+      $FUNC($ARG1, $ARG2, $ARG3, $$$MORE_ARGS)
+    replace: |
+      $FUNC({ $PARAM1: $ARG1, $PARAM2: $ARG2, $PARAM3: $ARG3 })
+
+# variables:
+#   extract_from_pattern:
+#     - $FUNC
+#     - $PARAM1
+#     - $PARAM2
+#     - $PARAM3
+#   parameters: 
+#     - $PARAM_OBJECT
+#   return_values: "none"
+
+# Variants for specific cases
+variants:
+  # Arrow function variant
+  - id: introduce_parameter_object_arrow
+    pattern:
+      match: |
+        const $FUNC = ($PARAM1, $PARAM2, $PARAM3, $$$MORE_PARAMS) => {
+          $$$BODY
+        }
+      constraints:
+        - min_params:
+            count: 4
+    transform:
+      replace: |
+        const $FUNC = ($PARAM_OBJECT) => {
+          const { $PARAM1, $PARAM2, $PARAM3 } = $PARAM_OBJECT;
+          $$$BODY
+        }
+      update_calls:
+        match: |
+          $FUNC($ARG1, $ARG2, $ARG3, $$$MORE_ARGS)
+        replace: |
+          $FUNC({ $PARAM1: $ARG1, $PARAM2: $ARG2, $PARAM3: $ARG3 })
+
+  # Method variant
+  - id: introduce_parameter_object_method
+    pattern:
+      match: |
+        $METHOD($PARAM1, $PARAM2, $PARAM3, $$$MORE_PARAMS) {
+          $$$BODY
+        }
+      constraints:
+        - inside:
+            context: "class_body"
+        - min_params:
+            count: 4
+    transform:
+      replace: |
+        $METHOD($PARAM_OBJECT) {
+          const { $PARAM1, $PARAM2, $PARAM3 } = $PARAM_OBJECT;
+          $$$BODY
+        }
+      update_calls:
+        match: |
+          $OBJ.$METHOD($ARG1, $ARG2, $ARG3, $$$MORE_ARGS)
+        replace: |
+          $OBJ.$METHOD({ $PARAM1: $ARG1, $PARAM2: $ARG2, $PARAM3: $ARG3 })
+
+  # Constructor variant
+  - id: introduce_parameter_object_constructor
+    pattern:
+      match: |
+        constructor($PARAM1, $PARAM2, $PARAM3, $$$MORE_PARAMS) {
+          $$$BODY
+        }
+      constraints:
+        - min_params:
+            count: 4
+    transform:
+      replace: |
+        constructor($PARAM_OBJECT) {
+          const { $PARAM1, $PARAM2, $PARAM3 } = $PARAM_OBJECT;
+          $$$BODY
+        }
+      update_calls:
+        match: |
+          new $CLASS($ARG1, $ARG2, $ARG3, $$$MORE_ARGS)
+        replace: |
+          new $CLASS({ $PARAM1: $ARG1, $PARAM2: $ARG2, $PARAM3: $ARG3 })
+
+# Language-specific configurations
+language_config:
+  javascript:
+    destructuring_style: "const { param1, param2 } = paramObject"
+    object_literal_style: "{ param1: arg1, param2: arg2 }"
+    naming_convention: "camelCase"
+  
+  typescript:
+    destructuring_style: "const { param1, param2 }: ParamObject = paramObject"
+    object_literal_style: "{ param1: arg1, param2: arg2 }"
+    naming_convention: "camelCase"
+    type_inference: true
+    interface_generation: true
+  
+  python:
+    destructuring_style: "param1, param2 = param_object['param1'], param_object['param2']"
+    object_literal_style: "{'param1': arg1, 'param2': arg2}"
+    naming_convention: "snake_case"
+    dict_unpacking: "**param_object"
+
+# Preconditions to check before applying
+preconditions:
+  - !unique_name
+    name: $PARAM_OBJECT
+  - !valid_scope
+    pattern: $PARAM_LIST
+
+# Examples for documentation
+examples:
+  - description: "Basic function parameter grouping"
+    before: |
+      function createUser(firstName, lastName, email, phone, address) {
+        return {
+          name: firstName + ' ' + lastName,
+          contact: { email, phone },
+          address
+        };
+      }
+      
+      const user = createUser('John', 'Doe', 'john@example.com', '555-1234', '123 Main St');
+    after: |
+      function createUser(userInfo) {
+        const { firstName, lastName, email, phone, address } = userInfo;
+        return {
+          name: firstName + ' ' + lastName,
+          contact: { email, phone },
+          address
+        };
+      }
+      
+      const user = createUser({
+        firstName: 'John',
+        lastName: 'Doe', 
+        email: 'john@example.com',
+        phone: '555-1234',
+        address: '123 Main St'
+      });
+  
+  - description: "Class method with configuration parameters"
+    before: |
+      class HttpClient {
+        request(url, method, headers, timeout, retries) {
+          // Implementation
+        }
+      }
+      
+      client.request('/api/users', 'GET', {}, 5000, 3);
+    after: |
+      class HttpClient {
+        request(requestConfig) {
+          const { url, method, headers, timeout, retries } = requestConfig;
+          // Implementation
+        }
+      }
+      
+      client.request({
+        url: '/api/users',
+        method: 'GET',
+        headers: {},
+        timeout: 5000,
+        retries: 3
+      });
+  
+  - description: "Constructor with many initialization parameters"
+    before: |
+      class Rectangle {
+        constructor(x, y, width, height, color, borderWidth) {
+          this.x = x;
+          this.y = y;
+          this.width = width;
+          this.height = height;
+          this.color = color;
+          this.borderWidth = borderWidth;
+        }
+      }
+      
+      const rect = new Rectangle(10, 20, 100, 50, 'red', 2);
+    after: |
+      class Rectangle {
+        constructor(rectConfig) {
+          const { x, y, width, height, color, borderWidth } = rectConfig;
+          this.x = x;
+          this.y = y;
+          this.width = width;
+          this.height = height;
+          this.color = color;
+          this.borderWidth = borderWidth;
+        }
+      }
+      
+      const rect = new Rectangle({
+        x: 10,
+        y: 20,
+        width: 100,
+        height: 50,
+        color: 'red',
+        borderWidth: 2
+      });
+  
+  - description: "Python function with dictionary parameter"
+    before: |
+      def process_data(input_file, output_file, format_type, compression, validate):
+          # Process data
+          pass
+      
+      process_data('input.csv', 'output.json', 'json', True, False)
+    after: |
+      def process_data(config):
+          input_file = config['input_file']
+          output_file = config['output_file']
+          format_type = config['format_type']
+          compression = config['compression']
+          validate = config['validate']
+          # Process data
+          pass
+      
+      process_data({
+          'input_file': 'input.csv',
+          'output_file': 'output.json',
+          'format_type': 'json',
+          'compression': True,
+          'validate': False
+      })

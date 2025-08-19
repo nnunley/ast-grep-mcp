@@ -1,0 +1,171 @@
+# Extract Variable Refactoring
+# Replaces complex expressions with descriptive variables
+
+id: extract_variable
+name: Extract Variable
+category: composing_methods
+description: Replace complex expressions with descriptive variables for better readability
+supported_languages: 
+  - javascript
+  - typescript
+  - python
+  - rust
+  - go
+  - java
+complexity: simple
+
+# Main pattern for general expression extraction
+pattern:
+  match: |
+    $COMPLEX_EXPR
+  constraints:
+    - inside:
+        context: "expression_statement"
+    - inside:
+        context: "return_statement"
+    - inside:
+        context: "assignment_expression"
+    - inside:
+        context: "call_expression"
+    - not:
+        matches: "identifier"
+    - not:
+        matches: "literal"
+
+transform:
+  replace: |
+    $VARIABLE_NAME
+  extract:
+    type: variable
+    template: |
+      const $VARIABLE_NAME = $COMPLEX_EXPR;
+    placement: before
+
+# variables:
+#   extract_from_pattern:
+#     - $COMPLEX_EXPR
+#   parameters: "none"
+#   return_values: "none"
+
+# Variants for specific cases
+variants:
+  # Extract from conditional expressions
+  - id: extract_conditional_expression
+    pattern:
+      match: |
+        if ($CONDITION) {
+          $BODY
+        }
+      constraints:
+        - inside:
+            context: "if_statement"
+    transform:
+      replace: |
+        if ($VARIABLE_NAME) {
+          $BODY
+        }
+      extract:
+        type: variable
+        template: |
+          const $VARIABLE_NAME = $CONDITION;
+        placement: before
+
+  # Extract from array/object access chains
+  - id: extract_access_chain
+    pattern:
+      match: |
+        $OBJECT.$PROP1.$PROP2
+      constraints:
+        - kind:
+            kinds: ["member_expression", "property_access_expression"]
+    transform:
+      replace: |
+        $VARIABLE_NAME
+      extract:
+        type: variable
+        template: |
+          const $VARIABLE_NAME = $OBJECT.$PROP1.$PROP2;
+        placement: before
+
+  # Extract from arithmetic expressions
+  - id: extract_calculation
+    pattern:
+      match: |
+        $LEFT $OP $RIGHT
+      constraints:
+        - kind:
+            kinds: ["binary_expression", "arithmetic_expression"]
+    transform:
+      replace: |
+        $VARIABLE_NAME
+      extract:
+        type: variable
+        template: |
+          const $VARIABLE_NAME = $LEFT $OP $RIGHT;
+        placement: before
+
+# Language-specific configurations
+language_config:
+  javascript:
+    variable_declaration: "const"
+    naming_convention: "camelCase"
+  
+  typescript:
+    variable_declaration: "const"
+    naming_convention: "camelCase"
+    type_inference: true
+  
+  python:
+    variable_declaration: ""
+    naming_convention: "snake_case"
+  
+  rust:
+    variable_declaration: "let"
+    naming_convention: "snake_case"
+    mutability_analysis: true
+  
+  go:
+    variable_declaration: ":="
+    naming_convention: "camelCase"
+    short_declaration: true
+  
+  java:
+    variable_declaration: "final var"
+    naming_convention: "camelCase"
+    type_inference: true
+
+# Preconditions to check before applying
+preconditions:
+  - !no_side_effects_in
+    expression: $COMPLEX_EXPR
+  - !unique_name
+    name: $VARIABLE_NAME
+  - !valid_scope
+    pattern: $COMPLEX_EXPR
+
+# Examples for documentation
+examples:
+  - description: "Extract complex calculation"
+    before: |
+      const total = price * quantity * (1 + taxRate);
+    after: |
+      const taxMultiplier = 1 + taxRate;
+      const total = price * quantity * taxMultiplier;
+  
+  - description: "Extract nested property access"
+    before: |
+      if (user.profile.settings.notifications.email) {
+        sendEmail();
+      }
+    after: |
+      const emailNotificationsEnabled = user.profile.settings.notifications.email;
+      if (emailNotificationsEnabled) {
+        sendEmail();
+      }
+  
+  - description: "Extract array method chain"
+    before: |
+      return items.filter(item => item.active).map(item => item.name).join(', ');
+    after: |
+      const activeItemNames = items.filter(item => item.active).map(item => item.name);
+      return activeItemNames.join(', ');

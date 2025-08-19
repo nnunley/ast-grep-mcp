@@ -71,6 +71,14 @@ impl ToolRouter {
             "validate_pattern" => Self::handle_validate_pattern(service, request).await,
             "explore_patterns" => Self::handle_explore_patterns(service, request).await,
 
+            // Refactoring operations
+            "analyze_refactoring" => Self::handle_analyze_refactoring(service, request).await,
+            "extract_function" => Self::handle_extract_function(service, request).await,
+            "refactor" => Self::handle_refactor(service, request).await,
+            "validate_refactoring" => Self::handle_validate_refactoring(service, request).await,
+            "list_refactorings" => Self::handle_list_refactorings(service, request).await,
+            "get_refactoring_info" => Self::handle_get_refactoring_info(service, request).await,
+
             _ => Err(ErrorData::method_not_found::<
                 rmcp::model::CallToolRequestMethod,
             >()),
@@ -345,5 +353,120 @@ impl ToolRouter {
             result.learning_path.len()
         );
         Self::create_formatted_response(&result, summary)
+    }
+
+    // Refactoring operations
+    async fn handle_analyze_refactoring(
+        service: &AstGrepService,
+        request: CallToolRequestParam,
+    ) -> Result<CallToolResult, ErrorData> {
+        let param: AnalyzeRefactoringParam = Self::parse_params(&request)?;
+        let result = service
+            .analyze_refactoring(param)
+            .await
+            .map_err(ErrorData::from)?;
+        
+        let summary = format!(
+            "Refactoring analysis complete: {} external reads, {} external writes, {} side effects detected. {} function.",
+            result.external_reads.len(),
+            result.external_writes.len(),
+            result.side_effects.len(),
+            if result.suggested_signature.is_pure { "Pure" } else { "Impure" }
+        );
+        
+        Self::create_formatted_response(&result, summary)
+    }
+
+    async fn handle_extract_function(
+        service: &AstGrepService,
+        request: CallToolRequestParam,
+    ) -> Result<CallToolResult, ErrorData> {
+        let param: ExtractFunctionParam = Self::parse_params(&request)?;
+        let result = service
+            .extract_function(param)
+            .await
+            .map_err(ErrorData::from)?;
+        
+        let summary = format!(
+            "Function extraction {}: {} external parameters, {} side effects. Generated function '{}' with {} analysis.",
+            if result.success { "successful" } else { "failed" },
+            result.analysis.external_reads.len(),
+            result.analysis.side_effects.len(),
+            result.analysis.suggested_signature.name,
+            if result.analysis.suggested_signature.is_pure { "pure" } else { "impure" }
+        );
+        
+        Self::create_formatted_response(&result, summary)
+    }
+
+    async fn handle_refactor(
+        service: &AstGrepService,
+        request: CallToolRequestParam,
+    ) -> Result<CallToolResult, ErrorData> {
+        let param: crate::refactoring::RefactoringRequest = Self::parse_params(&request)?;
+        let result = service
+            .refactor(param)
+            .await
+            .map_err(ErrorData::from)?;
+        let summary = format!(
+            "Refactoring {}: {} matches in {} files{}",
+            if result.applied { "applied" } else { "preview" },
+            result.matches_found,
+            result.files_affected.len(),
+            if let Some(ref preview) = result.changes_preview {
+                format!(" ({} lines affected)", preview.total_lines_affected)
+            } else {
+                String::new()
+            }
+        );
+        Self::create_formatted_response(&result, summary)
+    }
+
+    async fn handle_validate_refactoring(
+        service: &AstGrepService,
+        request: CallToolRequestParam,
+    ) -> Result<CallToolResult, ErrorData> {
+        let param: crate::refactoring::ValidateRefactoringRequest = Self::parse_params(&request)?;
+        let result = service
+            .validate_refactoring(param)
+            .await
+            .map_err(ErrorData::from)?;
+        let summary = format!(
+            "Refactoring validation {}: {} matches found",
+            if result.is_valid { "passed" } else { "failed" },
+            result.matches.len()
+        );
+        Self::create_formatted_response(&result, summary)
+    }
+
+    async fn handle_list_refactorings(
+        service: &AstGrepService,
+        request: CallToolRequestParam,
+    ) -> Result<CallToolResult, ErrorData> {
+        // Parse optional filter parameters
+        let filters: Option<serde_json::Map<String, serde_json::Value>> = 
+            request.arguments.clone();
+        
+        let result = service
+            .list_refactorings(filters)
+            .await
+            .map_err(ErrorData::from)?;
+        Self::create_json_response(result)
+    }
+
+    async fn handle_get_refactoring_info(
+        service: &AstGrepService,
+        request: CallToolRequestParam,
+    ) -> Result<CallToolResult, ErrorData> {
+        #[derive(serde::Deserialize)]
+        struct GetRefactoringInfoParam {
+            refactoring_id: String,
+        }
+        let param: GetRefactoringInfoParam = Self::parse_params(&request)?;
+        let result = service
+            .get_refactoring_info(&param.refactoring_id)
+            .await
+            .map_err(ErrorData::from)?;
+        Self::create_json_response(result)
     }
 }

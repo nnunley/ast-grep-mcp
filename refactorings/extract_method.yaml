@@ -1,0 +1,353 @@
+# Extract Method Refactoring
+# Extract repeated code blocks into reusable methods/functions
+
+id: extract_method
+name: Extract Method
+category: composing_methods
+description: Extract repeated code blocks into a reusable method
+supported_languages: 
+  - javascript
+  - typescript
+  - python
+  - rust
+  - go
+  - java
+complexity: moderate
+
+# Main pattern for general method extraction
+pattern:
+  match: |
+    $CODE_BLOCK
+  constraints:
+    - inside:
+        context: "function_body"
+    - inside:
+        context: "method_body"
+    - inside:
+        context: "block_statement"
+
+transform:
+  replace: |
+    $METHOD_NAME($PARAMS);
+  extract:
+    type: function
+    template: |
+      function $METHOD_NAME($PARAMS) {
+        $CODE_BLOCK
+        return $RETURN_VALUE;
+      }
+    placement: before_current_function
+
+# variables:
+#   extract_from_pattern:
+#     - $CODE_BLOCK
+#   parameters: 
+#     - $CODE_BLOCK
+#     - $PARAMS
+#   return_values:
+#     - $RESULT
+
+# Variants for specific extraction patterns
+variants:
+  # Extract loop calculation
+  - id: extract_loop_calculation
+    pattern:
+      match: |
+        $INIT
+        for ($ITEM in $ITEMS) {
+          $BODY
+        }
+        $USE_RESULT
+      constraints:
+        - kind:
+            kinds: ["for_statement", "while_statement"]
+    transform:
+      replace: |
+        const $RESULT = $FUNCTION_NAME($ITEMS);
+        $USE_RESULT
+      extract:
+        type: function
+        template: |
+          function $FUNCTION_NAME($ITEMS) {
+            $INIT
+            for ($ITEM in $ITEMS) {
+              $BODY
+            }
+            return $RESULT;
+          }
+        placement: before_current_function
+
+  # Extract conditional logic
+  - id: extract_conditional_logic
+    pattern:
+      match: |
+        if ($CONDITION) {
+          $TRUE_BRANCH
+        } else {
+          $FALSE_BRANCH
+        }
+      constraints:
+        - inside:
+            context: "if_statement"
+    transform:
+      replace: |
+        $RESULT = $FUNCTION_NAME($PARAMS);
+      extract:
+        type: function
+        template: |
+          function $FUNCTION_NAME($PARAMS) {
+            if ($CONDITION) {
+              $TRUE_BRANCH
+            } else {
+              $FALSE_BRANCH
+            }
+          }
+        placement: before_current_function
+
+  # Extract error handling pattern
+  - id: extract_error_handling
+    pattern:
+      match: |
+        try {
+          $TRY_BLOCK
+        } catch ($ERROR) {
+          $CATCH_BLOCK
+        }
+      constraints:
+        - inside:
+            context: "try_statement"
+    transform:
+      replace: |
+        $RESULT = $FUNCTION_NAME($PARAMS);
+      extract:
+        type: function
+        template: |
+          function $FUNCTION_NAME($PARAMS) {
+            try {
+              $TRY_BLOCK
+            } catch ($ERROR) {
+              $CATCH_BLOCK
+            }
+          }
+        placement: before_current_function
+
+  # Extract validation logic
+  - id: extract_validation
+    pattern:
+      match: |
+        if (!$VALIDATION_CHECK) {
+          $ERROR_HANDLING
+        }
+      constraints:
+        - inside:
+            context: "if_statement"
+    transform:
+      replace: |
+        if (!$VALIDATION_FUNCTION($PARAMS)) {
+          $ERROR_HANDLING
+        }
+      extract:
+        type: function
+        template: |
+          function $VALIDATION_FUNCTION($PARAMS) {
+            return $VALIDATION_CHECK;
+          }
+        placement: before_current_function
+
+# Language-specific configurations
+language_config:
+  javascript:
+    function_declaration: "function"
+    naming_convention: "camelCase"
+    scope_type: "lexical"
+  
+  typescript:
+    function_declaration: "function"
+    naming_convention: "camelCase"
+    scope_type: "lexical"
+    type_inference: true
+    return_type_annotation: true
+  
+  python:
+    function_declaration: "def"
+    naming_convention: "snake_case"
+    scope_type: "function"
+    indentation: "    "
+  
+  rust:
+    function_declaration: "fn"
+    naming_convention: "snake_case"
+    scope_type: "function"
+    mutability_analysis: true
+    lifetime_inference: true
+  
+  go:
+    function_declaration: "func"
+    naming_convention: "camelCase"
+    scope_type: "package"
+    error_handling: "explicit"
+  
+  java:
+    function_declaration: "private static"
+    naming_convention: "camelCase"
+    scope_type: "class"
+    visibility_modifiers: true
+    type_declarations: true
+
+# Preconditions to check before applying
+preconditions:
+  - !no_side_effects_in
+    expression: $CODE_BLOCK
+  - !unique_name
+    name: $METHOD_NAME
+  - !valid_scope
+    pattern: $CODE_BLOCK
+
+# Examples for documentation
+examples:
+  - description: "Extract calculation method"
+    before: |
+      function calculateTotal(items) {
+        let total = 0;
+        for (const item of items) {
+          total += item.price * item.quantity;
+        }
+        
+        const tax = total * 0.08;
+        return total + tax;
+      }
+    after: |
+      function calculateSubTotal(items) {
+        let total = 0;
+        for (const item of items) {
+          total += item.price * item.quantity;
+        }
+        return total;
+      }
+      
+      function calculateTotal(items) {
+        const subTotal = calculateSubTotal(items);
+        const tax = subTotal * 0.08;
+        return subTotal + tax;
+      }
+  
+  - description: "Extract validation logic"
+    before: |
+      function createUser(userData) {
+        if (!userData.email || !userData.email.includes('@')) {
+          throw new Error('Invalid email');
+        }
+        if (!userData.password || userData.password.length < 8) {
+          throw new Error('Password too short');
+        }
+        
+        return new User(userData);
+      }
+    after: |
+      function validateUserData(userData) {
+        if (!userData.email || !userData.email.includes('@')) {
+          throw new Error('Invalid email');
+        }
+        if (!userData.password || userData.password.length < 8) {
+          throw new Error('Password too short');
+        }
+      }
+      
+      function createUser(userData) {
+        validateUserData(userData);
+        return new User(userData);
+      }
+  
+  - description: "Extract error handling pattern"
+    before: |
+      async function fetchUserData(userId) {
+        try {
+          const response = await fetch(`/api/users/${userId}`);
+          if (!response.ok) {
+            throw new Error('Failed to fetch user');
+          }
+          return await response.json();
+        } catch (error) {
+          console.error('Error fetching user:', error);
+          return null;
+        }
+      }
+      
+      async function fetchUserPosts(userId) {
+        try {
+          const response = await fetch(`/api/users/${userId}/posts`);
+          if (!response.ok) {
+            throw new Error('Failed to fetch posts');
+          }
+          return await response.json();
+        } catch (error) {
+          console.error('Error fetching posts:', error);
+          return null;
+        }
+      }
+    after: |
+      async function handleApiRequest(url, errorMessage) {
+        try {
+          const response = await fetch(url);
+          if (!response.ok) {
+            throw new Error(errorMessage);
+          }
+          return await response.json();
+        } catch (error) {
+          console.error('API Error:', error);
+          return null;
+        }
+      }
+      
+      async function fetchUserData(userId) {
+        return await handleApiRequest(
+          `/api/users/${userId}`, 
+          'Failed to fetch user'
+        );
+      }
+      
+      async function fetchUserPosts(userId) {
+        return await handleApiRequest(
+          `/api/users/${userId}/posts`, 
+          'Failed to fetch posts'
+        );
+      }
+  
+  - description: "Extract conditional logic"
+    before: |
+      function getDiscountPrice(price, customerType, orderAmount) {
+        if (customerType === 'premium') {
+          if (orderAmount > 100) {
+            return price * 0.8; // 20% discount
+          } else {
+            return price * 0.9; // 10% discount
+          }
+        } else {
+          if (orderAmount > 200) {
+            return price * 0.95; // 5% discount
+          } else {
+            return price; // no discount
+          }
+        }
+      }
+    after: |
+      function calculateDiscountMultiplier(customerType, orderAmount) {
+        if (customerType === 'premium') {
+          if (orderAmount > 100) {
+            return 0.8; // 20% discount
+          } else {
+            return 0.9; // 10% discount
+          }
+        } else {
+          if (orderAmount > 200) {
+            return 0.95; // 5% discount
+          } else {
+            return 1.0; // no discount
+          }
+        }
+      }
+      
+      function getDiscountPrice(price, customerType, orderAmount) {
+        const multiplier = calculateDiscountMultiplier(customerType, orderAmount);
+        return price * multiplier;
+      }

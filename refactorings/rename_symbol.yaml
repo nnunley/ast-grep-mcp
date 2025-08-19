@@ -1,0 +1,177 @@
+# Rename Symbol Refactoring
+# Consistently renames variables, functions, or classes across scope
+
+id: rename_symbol
+name: Rename Symbol
+category: organizing_code
+description: Rename variables, functions, or classes consistently across their scope
+supported_languages: 
+  - javascript
+  - typescript
+  - python
+  - rust
+  - go
+  - java
+complexity: moderate
+
+# Main pattern for general symbol renaming
+pattern:
+  match: |
+    $OLD_NAME
+  constraints:
+    - kind:
+        kinds: ["identifier", "function_name", "class_name"]
+
+transform:
+  replace: |
+    $NEW_NAME
+  scope_analysis:
+    - !find_declaration
+      identifier: $OLD_NAME
+    - !find_all_references
+      identifier: $OLD_NAME
+    - !check_conflicts
+      identifier: $NEW_NAME
+
+# No extraction needed for rename
+# variables:
+#   extract_from_pattern:
+#     - $OLD_NAME
+#   parameters: "none"
+#   return_values: "none"
+
+# Variants for specific symbol types
+variants:
+  # Rename function declaration and calls
+  - id: rename_function
+    pattern:
+      match: |
+        function $OLD_NAME($$$PARAMS) {
+          $$$BODY
+        }
+    transform:
+      replace: |
+        function $NEW_NAME($$$PARAMS) {
+          $$$BODY
+        }
+      update_calls:
+        match: |
+          $OLD_NAME($$$ARGS)
+        replace: |
+          $NEW_NAME($$$ARGS)
+
+  # Rename method in class
+  - id: rename_method
+    pattern:
+      match: |
+        $OLD_NAME($$$PARAMS) {
+          $$$BODY
+        }
+      constraints:
+        - inside:
+            context: "class_body"
+    transform:
+      replace: |
+        $NEW_NAME($$$PARAMS) {
+          $$$BODY
+        }
+
+  # Rename class declaration
+  - id: rename_class
+    pattern:
+      match: |
+        class $OLD_NAME {
+          $$$BODY
+        }
+    transform:
+      replace: |
+        class $NEW_NAME {
+          $$$BODY
+        }
+      update_calls:
+        match: |
+          new $OLD_NAME($$$ARGS)
+        replace: |
+          new $NEW_NAME($$$ARGS)
+
+# Language-specific configurations
+language_config:
+  javascript:
+    identifier_rules: "camelCase for variables/functions, PascalCase for classes"
+    scope_type: "lexical"
+  
+  typescript:
+    identifier_rules: "camelCase for variables/functions, PascalCase for classes/types"
+    scope_type: "lexical"
+    type_aware: true
+  
+  python:
+    identifier_rules: "snake_case for variables/functions, PascalCase for classes"
+    scope_type: "lexical"
+    special_methods: "__init__, __str__, etc. require special handling"
+  
+  rust:
+    identifier_rules: "snake_case for variables/functions, PascalCase for types"
+    scope_type: "lexical"
+    lifetime_aware: true
+  
+  go:
+    identifier_rules: "camelCase for private, PascalCase for public"
+    scope_type: "package"
+    exported_check: true
+  
+  java:
+    identifier_rules: "camelCase for variables/methods, PascalCase for classes"
+    scope_type: "class"
+    visibility_aware: true
+
+# Preconditions to check before applying
+preconditions:
+  - !unique_name
+    name: $NEW_NAME
+  - !valid_scope
+    pattern: $OLD_NAME
+
+# Examples for documentation
+examples:
+  - description: "Rename variable"
+    before: |
+      let userName = getUserName();
+      console.log(userName);
+      return userName;
+    after: |
+      let currentUserName = getUserName();
+      console.log(currentUserName);
+      return currentUserName;
+  
+  - description: "Rename function and its calls"
+    before: |
+      function getData() {
+        return fetch('/api/data');
+      }
+      
+      const result = await getData();
+    after: |
+      function fetchUserData() {
+        return fetch('/api/data');
+      }
+      
+      const result = await fetchUserData();
+  
+  - description: "Rename class and constructor calls"
+    before: |
+      class User {
+        constructor(name) {
+          this.name = name;
+        }
+      }
+      
+      const user = new User('John');
+    after: |
+      class Person {
+        constructor(name) {
+          this.name = name;
+        }
+      }
+      
+      const user = new Person('John');

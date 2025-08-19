@@ -192,6 +192,24 @@ enum Commands {
         #[arg(short, long)]
         file: Option<PathBuf>,
     },
+    /// Analyze code fragment for refactoring potential (extract function analysis)
+    AnalyzeRefactoring {
+        /// Programming language
+        #[arg(short, long)]
+        language: String,
+        /// Code fragment to extract
+        #[arg(long)]
+        fragment: String,
+        /// Full context code
+        #[arg(long)]
+        context: Option<String>,
+        /// File containing the full context
+        #[arg(short, long)]
+        file: Option<PathBuf>,
+        /// Line range for fragment in format "start:end" (1-based, inclusive)
+        #[arg(long)]
+        fragment_lines: Option<String>,
+    },
 }
 
 /// Main entry point for the ast-grep MCP service.
@@ -473,6 +491,225 @@ async fn run_cli_command(command: Commands, config: ServiceConfig) -> Result<()>
             println!("Available node kinds: {}", result.node_kinds.join(", "));
             println!("\nAST structure:");
             println!("{}", result.ast);
+        }
+        
+        Commands::AnalyzeRefactoring {
+            language,
+            fragment,
+            context,
+            file,
+            fragment_lines,
+        } => {
+            let (context_content, actual_fragment) = match (context, file, fragment_lines.as_ref()) {
+                // Direct context provided
+                (Some(ctx), None, None) => (ctx, fragment.clone()),
+                
+                // File provided, use fragment as-is
+                (None, Some(file_path), None) => {
+                    let content = std::fs::read_to_string(file_path)?;
+                    (content, fragment.clone())
+                }
+                
+                // File provided with line range for fragment extraction
+                (None, Some(file_path), Some(line_range)) => {
+                    let content = std::fs::read_to_string(file_path)?;
+                    let lines: Vec<&str> = content.lines().collect();
+                    
+                    // Parse line range (format: "start:end", 1-based inclusive)
+                    let parts: Vec<&str> = line_range.split(':').collect();
+                    if parts.len() != 2 {
+                        anyhow::bail!("Line range must be in format 'start:end' (e.g., '10:15')");
+                    }
+                    
+                    let start_line: usize = parts[0].parse()
+                        .map_err(|_| anyhow::anyhow!("Invalid start line number: {}", parts[0]))?;
+                    let end_line: usize = parts[1].parse()
+                        .map_err(|_| anyhow::anyhow!("Invalid end line number: {}", parts[1]))?;
+                    
+                    if start_line == 0 || end_line == 0 {
+                        anyhow::bail!("Line numbers must be 1-based (start from 1)");
+                    }
+                    
+                    if start_line > end_line {
+                        anyhow::bail!("Start line ({}) must be <= end line ({})", start_line, end_line);
+                    }
+                    
+                    if end_line > lines.len() {
+                        anyhow::bail!("End line ({}) exceeds file length ({})", end_line, lines.len());
+                    }
+                    
+                    // Extract fragment from lines (convert to 0-based indexing)
+                    let fragment_lines = &lines[(start_line - 1)..end_line];
+                    let extracted_fragment = fragment_lines.join("\n");
+                    
+                    println!("📍 Extracted fragment from lines {}-{}:", start_line, end_line);
+                    println!("   {}", extracted_fragment.replace('\n', "\\n"));
+                    
+                    (content, extracted_fragment)
+                }
+                
+                // Invalid combinations
+                (Some(_), Some(_), _) => {
+                    anyhow::bail!("Cannot specify both --context and --file");
+                }
+                (Some(_), None, Some(_)) => {
+                    anyhow::bail!("--fragment-lines can only be used with --file");
+                }
+                (None, None, _) => {
+                    anyhow::bail!("Must specify either --context or --file for full context");
+                }
+            };
+            
+            // Test our new refactoring analysis functionality
+            use ast_grep_mcp::refactoring::capture_analysis::CaptureAnalysisEngine;
+            
+            let engine = CaptureAnalysisEngine::new();
+            
+            println!("\n=== Refactoring Analysis Results ===");
+            println!("Language: {}", language);
+            println!("Fragment: {}", actual_fragment);
+            println!("Context length: {} characters", context_content.len());
+            
+            match engine.analyze_capture_simple(&actual_fragment, &context_content, &language) {
+                Ok(analysis) => {
+                    println!("\n📊 Analysis Results:");
+                    
+                    // External reads (parameters needed)
+                    println!("\n🔗 External Variables (Parameters):");
+                    for var in &analysis.external_reads {
+                        println!("  - {} ({:?} from scope level {})", var.name, var.usage_type, var.scope_level);
+                    }
+                    
+                    // External writes (variables modified)
+                    println!("\n✏️  External Writes (Modified Variables):");
+                    for var in &analysis.external_writes {
+                        println!("  - {} ({:?} from scope level {})", var.name, var.usage_type, var.scope_level);
+                    }
+                    
+                    // Internal declarations 
+                    println!("\n📋 Internal Declarations:");
+                    for var in &analysis.internal_declarations {
+                        println!("  - {} ({:?})", var.name, var.usage_type);
+                    }
+                    
+                    // Return values detected
+                    println!("\n🔄 Return Values Detected:");
+                    for ret in &analysis.return_values {
+                        if let Some(ref inferred_type) = ret.inferred_type {
+                            println!("  - {} (type: {})", ret.expression, inferred_type);
+                        } else {
+                            println!("  - {}", ret.expression);
+                        }
+                    }
+                    
+                    // Suggested return strategy
+                    println!("\n💡 Suggested Return Strategy:");
+                    if let Some(ref strategy) = analysis.suggested_return {
+                        match strategy {
+                            ast_grep_mcp::refactoring::capture_analysis::ReturnStrategy::Single { expression, var_type } => {
+                                if let Some(typ) = var_type {
+                                    println!("  Single return: {} (type: {})", expression, typ);
+                                } else {
+                                    println!("  Single return: {}", expression);
+                                }
+                            }
+                            ast_grep_mcp::refactoring::capture_analysis::ReturnStrategy::Multiple { values } => {
+                                println!("  Multiple return: [{}]", values.join(", "));
+                            }
+                            ast_grep_mcp::refactoring::capture_analysis::ReturnStrategy::InPlace { modified_params } => {
+                                println!("  In-place modification: modify [{}]", modified_params.join(", "));
+                            }
+                            ast_grep_mcp::refactoring::capture_analysis::ReturnStrategy::Void => {
+                                println!("  Void (no return value)");
+                            }
+                        }
+                    } else {
+                        println!("  None detected");
+                    }
+                    
+                    // Side effects
+                    println!("\n⚡ Side Effects Detected:");
+                    if analysis.side_effects.is_empty() {
+                        println!("  None (pure function)");
+                    } else {
+                        for effect in &analysis.side_effects {
+                            match effect {
+                                ast_grep_mcp::refactoring::capture_analysis::SideEffect::FunctionCall { name, .. } => {
+                                    println!("  - Function call: {}", name);
+                                }
+                                ast_grep_mcp::refactoring::capture_analysis::SideEffect::GlobalMutation { variable } => {
+                                    println!("  - Global mutation: {}", variable);
+                                }
+                                ast_grep_mcp::refactoring::capture_analysis::SideEffect::IOOperation { operation_type } => {
+                                    println!("  - I/O operation: {}", operation_type);
+                                }
+                                ast_grep_mcp::refactoring::capture_analysis::SideEffect::AsyncOperation { operation_type, target } => {
+                                    if let Some(target) = target {
+                                        println!("  - Async operation: {} ({})", operation_type, target);
+                                    } else {
+                                        println!("  - Async operation: {}", operation_type);
+                                    }
+                                }
+                                ast_grep_mcp::refactoring::capture_analysis::SideEffect::DOMManipulation { element, action } => {
+                                    println!("  - DOM manipulation: {}.{}", element, action);
+                                }
+                                ast_grep_mcp::refactoring::capture_analysis::SideEffect::NetworkOperation { url, method } => {
+                                    println!("  - Network operation: {} {}", method, url);
+                                }
+                                _ => {
+                                    println!("  - Other side effect: {:?}", effect);
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Suggested function signature
+                    println!("\n🔧 Suggested Function Signature:");
+                    let params: Vec<String> = analysis.external_reads.iter()
+                        .map(|var| var.name.clone())
+                        .collect();
+                    let params_str = if params.is_empty() {
+                        String::new()
+                    } else {
+                        params.join(", ")
+                    };
+                    
+                    match &analysis.suggested_return {
+                        Some(ast_grep_mcp::refactoring::capture_analysis::ReturnStrategy::Void) => {
+                            println!("  function extractedFunction({}) {{", params_str);
+                            println!("    // {}", fragment.replace("\n", "\n    // "));
+                            println!("  }}");
+                        }
+                        Some(ast_grep_mcp::refactoring::capture_analysis::ReturnStrategy::Single { expression, .. }) => {
+                            println!("  function extractedFunction({}) {{", params_str);
+                            println!("    // {}", fragment.replace("\n", "\n    // "));
+                            println!("    return {};", expression);
+                            println!("  }}");
+                        }
+                        Some(ast_grep_mcp::refactoring::capture_analysis::ReturnStrategy::Multiple { values }) => {
+                            println!("  function extractedFunction({}) {{", params_str);
+                            println!("    // {}", fragment.replace("\n", "\n    // "));
+                            println!("    return [{}];", values.join(", "));
+                            println!("  }}");
+                        }
+                        Some(ast_grep_mcp::refactoring::capture_analysis::ReturnStrategy::InPlace { modified_params }) => {
+                            println!("  function extractedFunction({}) {{", params_str);
+                            println!("    // {}", fragment.replace("\n", "\n    // "));
+                            println!("    // Modifies: [{}]", modified_params.join(", "));
+                            println!("  }}");
+                        }
+                        None => {
+                            println!("  function extractedFunction({}) {{", params_str);
+                            println!("    // {}", fragment.replace("\n", "\n    // "));
+                            println!("  }}");
+                        }
+                    }
+                    
+                }
+                Err(e) => {
+                    println!("❌ Analysis failed: {}", e);
+                }
+            }
         }
     }
 

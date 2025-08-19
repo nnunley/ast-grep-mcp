@@ -1,0 +1,230 @@
+# Replace Magic Number with Constant Refactoring
+# Replaces hard-coded numbers with named constants
+
+id: replace_magic_number
+name: Replace Magic Number with Constant
+category: organizing_data
+description: Replace hard-coded numbers with named constants for better readability and maintainability
+supported_languages: 
+  - javascript
+  - typescript
+  - python
+  - rust
+  - go
+  - java
+complexity: simple
+
+# Main pattern for magic number replacement
+pattern:
+  match: |
+    $NUMBER
+  constraints:
+    - kind:
+        kinds: ["number_literal"]
+    - not_in:
+        contexts: ["const_declaration", "enum_declaration", "import_statement", "export_statement"]
+    - value_not_in:
+        values: ["0", "1", "-1"]
+
+transform:
+  replace: |
+    $CONSTANT_NAME
+  extract:
+    type: constant
+    template: |
+      const $CONSTANT_NAME = $NUMBER;
+    placement: top_of_scope
+
+# variables:
+#   extract_from_pattern:
+#     - $NUMBER
+#   parameters: "none"
+#   return_values: "none"
+
+# Variants for specific cases
+variants:
+  # Replace magic numbers in array/string indexing
+  - id: replace_index_magic_number
+    pattern:
+      match: |
+        $ARRAY[$NUMBER]
+      constraints:
+        - kind:
+            kinds: ["subscript_expression"]
+        - value_not_in:
+            values: ["0", "1", "-1"]
+    transform:
+      replace: |
+        $ARRAY[$CONSTANT_NAME]
+      extract:
+        type: constant
+        template: |
+          const $CONSTANT_NAME = $NUMBER;
+        placement: top_of_scope
+
+  # Replace magic numbers in comparisons
+  - id: replace_comparison_magic_number
+    pattern:
+      match: |
+        $VARIABLE $OP $NUMBER
+      constraints:
+        - kind:
+            kinds: ["binary_expression"]
+        - value_not_in:
+            values: ["0", "1", "-1"]
+    transform:
+      replace: |
+        $VARIABLE $OP $CONSTANT_NAME
+      extract:
+        type: constant
+        template: |
+          const $CONSTANT_NAME = $NUMBER;
+        placement: top_of_scope
+
+  # Replace magic numbers in timeout/interval calls
+  - id: replace_timeout_magic_number
+    pattern:
+      match: |
+        setTimeout($CALLBACK, $NUMBER)
+      constraints:
+        - value_not_in:
+            values: ["0", "1", "-1"]
+    transform:
+      replace: |
+        setTimeout($CALLBACK, $CONSTANT_NAME)
+      extract:
+        type: constant
+        template: |
+          const $CONSTANT_NAME = $NUMBER;
+        placement: top_of_scope
+
+  # Replace magic numbers in mathematical calculations
+  - id: replace_calculation_magic_number
+    pattern:
+      match: |
+        $LEFT $OP $NUMBER
+      constraints:
+        - kind:
+            kinds: ["binary_expression"]
+        - value_not_in:
+            values: ["0", "1", "-1", "2"]
+    transform:
+      replace: |
+        $LEFT $OP $CONSTANT_NAME
+      extract:
+        type: constant
+        template: |
+          const $CONSTANT_NAME = $NUMBER;
+        placement: top_of_scope
+
+# Language-specific configurations
+language_config:
+  javascript:
+    constant_declaration: "const"
+    naming_convention: "SCREAMING_SNAKE_CASE"
+    placement: "file_top"
+  
+  typescript:
+    constant_declaration: "const"
+    naming_convention: "SCREAMING_SNAKE_CASE"
+    type_annotation: "number"
+    placement: "file_top"
+  
+  python:
+    constant_declaration: ""
+    naming_convention: "SCREAMING_SNAKE_CASE"
+    placement: "module_top"
+  
+  rust:
+    constant_declaration: "const"
+    naming_convention: "SCREAMING_SNAKE_CASE"
+    type_annotation: "required"
+    placement: "module_top"
+  
+  go:
+    constant_declaration: "const"
+    naming_convention: "PascalCase"
+    placement: "package_top"
+  
+  java:
+    constant_declaration: "private static final"
+    naming_convention: "SCREAMING_SNAKE_CASE"
+    type_annotation: "int/double/float"
+    placement: "class_top"
+
+# Preconditions to check before applying
+preconditions:
+  - !unique_name
+    name: $CONSTANT_NAME
+  - !valid_scope
+    pattern: $NUMBER
+
+# Examples for documentation
+examples:
+  - description: "Replace timeout magic number"
+    before: |
+      setTimeout(() => {
+        console.log('Delayed execution');
+      }, 5000);
+    after: |
+      const NOTIFICATION_DELAY_MS = 5000;
+      setTimeout(() => {
+        console.log('Delayed execution');
+      }, NOTIFICATION_DELAY_MS);
+  
+  - description: "Replace HTTP status code"
+    before: |
+      if (response.status === 404) {
+        showNotFound();
+      }
+    after: |
+      const HTTP_NOT_FOUND = 404;
+      if (response.status === HTTP_NOT_FOUND) {
+        showNotFound();
+      }
+  
+  - description: "Replace array size limit"
+    before: |
+      if (items.length > 100) {
+        return items.slice(0, 100);
+      }
+    after: |
+      const MAX_ITEMS_LIMIT = 100;
+      if (items.length > MAX_ITEMS_LIMIT) {
+        return items.slice(0, MAX_ITEMS_LIMIT);
+      }
+  
+  - description: "Replace mathematical constant"
+    before: |
+      const area = radius * radius * 3.14159;
+    after: |
+      const PI = 3.14159;
+      const area = radius * radius * PI;
+  
+  - description: "Replace percentage calculation"
+    before: |
+      const discount = price * 0.15;
+    after: |
+      const DISCOUNT_RATE = 0.15;
+      const discount = price * DISCOUNT_RATE;
+  
+  - description: "Replace retry count"
+    before: |
+      for (let i = 0; i < 3; i++) {
+        try {
+          await fetchData();
+          break;
+        } catch (error) {
+          console.log(`Retry ${i + 1}`);
+        }
+      }
+    after: |
+      const MAX_RETRY_ATTEMPTS = 3;
+      for (let i = 0; i < MAX_RETRY_ATTEMPTS; i++) {
+        try {
+          await fetchData();
+          break;
+        } catch (error) {
+          console.log(`Retry ${i + 1}`);
+        }
+      }

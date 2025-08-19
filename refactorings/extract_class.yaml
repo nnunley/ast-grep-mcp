@@ -1,0 +1,368 @@
+# Extract Class Refactoring
+# Extract related methods and data into a new class
+
+id: extract_class
+name: Extract Class
+category: organizing_data
+description: Extract related methods and data into a new class to improve cohesion and reduce class complexity
+supported_languages: 
+  - javascript
+  - typescript
+  - python
+  - java
+complexity: complex
+
+# Main pattern for class extraction
+pattern:
+  match: |
+    class $ORIGINAL_CLASS {
+      $FIELD1
+      $FIELD2
+      $$$
+      $METHOD1
+      $METHOD2
+    }
+  constraints:
+    - kind:
+        kinds: ["class_declaration"]
+
+transform:
+  replace: |
+    class $ORIGINAL_CLASS {
+      $EXTRACTED_CLASS_FIELD
+      $$$
+      $DELEGATING_METHODS
+    }
+  extract:
+    type: class
+    template: |
+      class $NEW_CLASS {
+        $FIELD1
+        $FIELD2
+        
+        $METHOD1
+        $METHOD2
+      }
+    placement: before
+
+# variables:
+#   extract_from_pattern:
+#     - $ORIGINAL_CLASS
+#     - $FIELD1
+#     - $FIELD2
+#     - $METHOD1
+#     - $METHOD2
+#   parameters:
+#     - $NEW_CLASS
+#     - $EXTRACTED_CLASS_FIELD
+#   return_values: "none"
+
+# Variants for specific extraction scenarios
+variants:
+  # Extract data-focused class
+  - id: extract_data_class
+    pattern:
+      match: |
+        class $ORIGINAL_CLASS {
+          $DATA_FIELD1
+          $DATA_FIELD2
+          $DATA_FIELD3
+          $$$
+          $DATA_METHOD1
+          $DATA_METHOD2
+        }
+      constraints:
+        - kind:
+            kinds: ["class_declaration"]
+    transform:
+      replace: |
+        class $ORIGINAL_CLASS {
+          $DATA_OBJECT
+          $$$
+        }
+      extract:
+        type: class
+        template: |
+          class $DATA_CLASS {
+            $DATA_FIELD1
+            $DATA_FIELD2
+            $DATA_FIELD3
+            
+            $DATA_METHOD1
+            $DATA_METHOD2
+          }
+        placement: before
+        delegating_methods: |
+          $DATA_METHOD1($$$ARGS) {
+            return this.$DATA_OBJECT.$DATA_METHOD1($$$ARGS);
+          }
+          
+          $DATA_METHOD2($$$ARGS) {
+            return this.$DATA_OBJECT.$DATA_METHOD2($$$ARGS);
+          }
+
+  # Extract behavior-focused class
+  - id: extract_behavior_class
+    pattern:
+      match: |
+        class $ORIGINAL_CLASS {
+          $$$
+          $BEHAVIOR_METHOD1
+          $BEHAVIOR_METHOD2
+          $BEHAVIOR_METHOD3
+        }
+      constraints:
+        - kind:
+            kinds: ["class_declaration"]
+    transform:
+      replace: |
+        class $ORIGINAL_CLASS {
+          $BEHAVIOR_HANDLER
+          $$$
+        }
+      extract:
+        type: class
+        template: |
+          class $BEHAVIOR_CLASS {
+            $BEHAVIOR_METHOD1
+            $BEHAVIOR_METHOD2
+            $BEHAVIOR_METHOD3
+          }
+        placement: before
+
+  # Extract service class
+  - id: extract_service_class
+    pattern:
+      match: |
+        class $ORIGINAL_CLASS {
+          $$$
+          $SERVICE_METHOD1
+          $SERVICE_METHOD2
+        }
+      constraints:
+        - kind:
+            kinds: ["class_declaration"]
+    transform:
+      replace: |
+        class $ORIGINAL_CLASS {
+          $SERVICE_INSTANCE
+          $$$
+        }
+      extract:
+        type: class
+        template: |
+          class $SERVICE_CLASS {
+            $SERVICE_METHOD1
+            $SERVICE_METHOD2
+          }
+        placement: before
+
+# Language-specific configurations
+language_config:
+  javascript:
+    class_declaration: "class"
+    field_access: "this."
+    naming_convention: "PascalCase for classes, camelCase for instances"
+    delegation_pattern: "method delegation"
+  
+  typescript:
+    class_declaration: "class"
+    field_access: "this."
+    naming_convention: "PascalCase for classes, camelCase for instances"
+    type_annotations: true
+    interface_extraction: true
+  
+  python:
+    class_declaration: "class"
+    field_access: "self."
+    naming_convention: "PascalCase for classes, snake_case for instances"
+    constructor_method: "__init__"
+  
+  java:
+    class_declaration: "class"
+    field_access: "this."
+    naming_convention: "PascalCase for classes, camelCase for instances"
+    access_modifiers: true
+    package_organization: true
+
+# Preconditions to check before applying
+preconditions:
+  - !unique_name
+    name: $NEW_CLASS
+  - !valid_scope
+    pattern: $ORIGINAL_CLASS
+
+# Note: Postconditions removed - not implemented in current type system
+
+# Examples for documentation
+examples:
+  - description: "Extract address data into separate class"
+    before: |
+      class Person {
+        name
+        email
+        street
+        city
+        zipCode
+        
+        getName() { return this.name; }
+        getEmail() { return this.email; }
+        getFullAddress() { 
+          return `${this.street}, ${this.city} ${this.zipCode}`;
+        }
+        validateAddress() {
+          return this.street && this.city && this.zipCode;
+        }
+      }
+    after: |
+      class Address {
+        street
+        city
+        zipCode
+        
+        getFullAddress() {
+          return `${this.street}, ${this.city} ${this.zipCode}`;
+        }
+        
+        validateAddress() {
+          return this.street && this.city && this.zipCode;
+        }
+      }
+      
+      class Person {
+        name
+        email
+        address
+        
+        getName() { return this.name; }
+        getEmail() { return this.email; }
+        getFullAddress() { 
+          return this.address.getFullAddress();
+        }
+        validateAddress() {
+          return this.address.validateAddress();
+        }
+      }
+  
+  - description: "Extract calculation logic into separate class"
+    before: |
+      class Order {
+        items
+        taxRate
+        discountRate
+        shippingCost
+        
+        calculateSubtotal() {
+          return this.items.reduce((sum, item) => sum + item.price, 0);
+        }
+        
+        calculateTax(subtotal) {
+          return subtotal * this.taxRate;
+        }
+        
+        calculateDiscount(subtotal) {
+          return subtotal * this.discountRate;
+        }
+        
+        calculateTotal() {
+          const subtotal = this.calculateSubtotal();
+          const tax = this.calculateTax(subtotal);
+          const discount = this.calculateDiscount(subtotal);
+          return subtotal + tax - discount + this.shippingCost;
+        }
+      }
+    after: |
+      class OrderCalculator {
+        taxRate
+        discountRate
+        shippingCost
+        
+        calculateSubtotal(items) {
+          return items.reduce((sum, item) => sum + item.price, 0);
+        }
+        
+        calculateTax(subtotal) {
+          return subtotal * this.taxRate;
+        }
+        
+        calculateDiscount(subtotal) {
+          return subtotal * this.discountRate;
+        }
+        
+        calculateTotal(items) {
+          const subtotal = this.calculateSubtotal(items);
+          const tax = this.calculateTax(subtotal);
+          const discount = this.calculateDiscount(subtotal);
+          return subtotal + tax - discount + this.shippingCost;
+        }
+      }
+      
+      class Order {
+        items
+        calculator
+        
+        calculateTotal() {
+          return this.calculator.calculateTotal(this.items);
+        }
+      }
+  
+  - description: "Extract validation logic into separate class"
+    before: |
+      class User {
+        username
+        email
+        password
+        profile
+        
+        validateUsername() {
+          return this.username && this.username.length >= 3;
+        }
+        
+        validateEmail() {
+          const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+          return emailRegex.test(this.email);
+        }
+        
+        validatePassword() {
+          return this.password && this.password.length >= 8;
+        }
+        
+        isValid() {
+          return this.validateUsername() && 
+                 this.validateEmail() && 
+                 this.validatePassword();
+        }
+      }
+    after: |
+      class UserValidator {
+        validateUsername(username) {
+          return username && username.length >= 3;
+        }
+        
+        validateEmail(email) {
+          const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+          return emailRegex.test(email);
+        }
+        
+        validatePassword(password) {
+          return password && password.length >= 8;
+        }
+        
+        validateUser(user) {
+          return this.validateUsername(user.username) && 
+                 this.validateEmail(user.email) && 
+                 this.validatePassword(user.password);
+        }
+      }
+      
+      class User {
+        username
+        email
+        password
+        profile
+        validator
+        
+        isValid() {
+          return this.validator.validateUser(this);
+        }
+      }

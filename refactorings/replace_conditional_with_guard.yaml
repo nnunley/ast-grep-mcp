@@ -1,0 +1,323 @@
+# Replace Conditional with Guard Clause Refactoring
+# Replace nested conditionals with early returns for better readability
+
+id: replace_conditional_with_guard
+name: Replace Conditional with Guard Clause
+category: simplifying_conditionals
+description: Replace nested conditionals with early returns or guard clauses to reduce nesting and improve readability
+supported_languages: 
+  - javascript
+  - typescript
+  - python
+  - rust
+  - go
+  - java
+complexity: simple
+
+# Main pattern for if-else with nested logic
+pattern:
+  match: |
+    if ($CONDITION) {
+      $MAIN_LOGIC
+    } else {
+      $EARLY_RETURN
+    }
+  constraints:
+    - inside:
+        context: "function_body"
+    - inside:
+        context: "method_body"
+    - inside:
+        context: "block_statement"
+
+transform:
+  replace: |
+    if (!($CONDITION)) {
+      $EARLY_RETURN
+    }
+    $MAIN_LOGIC
+
+# variables:
+#   extract_from_pattern:
+#     - $CONDITION
+#     - $MAIN_LOGIC
+#     - $EARLY_RETURN
+#   parameters: "none"
+#   return_values: "none"
+
+# Variants for different conditional patterns
+variants:
+  # Null/undefined check pattern
+  - id: guard_null_check
+    pattern:
+      match: |
+        if ($OBJECT !== null && $OBJECT !== undefined) {
+          $MAIN_LOGIC
+        } else {
+          $EARLY_RETURN
+        }
+    transform:
+      replace: |
+        if ($OBJECT === null || $OBJECT === undefined) {
+          $EARLY_RETURN
+        }
+        $MAIN_LOGIC
+
+  # Truthy check pattern
+  - id: guard_truthy_check
+    pattern:
+      match: |
+        if ($VALUE) {
+          $MAIN_LOGIC
+        } else {
+          $EARLY_RETURN
+        }
+    transform:
+      replace: |
+        if (!$VALUE) {
+          $EARLY_RETURN
+        }
+        $MAIN_LOGIC
+
+  # Multiple condition guard
+  - id: guard_multiple_conditions
+    pattern:
+      match: |
+        if ($CONDITION1 && $CONDITION2) {
+          $MAIN_LOGIC
+        } else {
+          $EARLY_RETURN
+        }
+    transform:
+      replace: |
+        if (!$CONDITION1 || !$CONDITION2) {
+          $EARLY_RETURN
+        }
+        $MAIN_LOGIC
+
+  # Nested if-else-if pattern
+  - id: guard_nested_conditions
+    pattern:
+      match: |
+        if ($CONDITION1) {
+          if ($CONDITION2) {
+            $MAIN_LOGIC
+          } else {
+            $EARLY_RETURN2
+          }
+        } else {
+          $EARLY_RETURN1
+        }
+    transform:
+      replace: |
+        if (!$CONDITION1) {
+          $EARLY_RETURN1
+        }
+        if (!$CONDITION2) {
+          $EARLY_RETURN2
+        }
+        $MAIN_LOGIC
+
+  # Array/collection length check
+  - id: guard_array_check
+    pattern:
+      match: |
+        if ($ARRAY.length > 0) {
+          $MAIN_LOGIC
+        } else {
+          $EARLY_RETURN
+        }
+    transform:
+      replace: |
+        if ($ARRAY.length === 0) {
+          $EARLY_RETURN
+        }
+        $MAIN_LOGIC
+
+# Language-specific configurations
+language_config:
+  javascript:
+    early_return_keywords: ["return", "throw", "break", "continue"]
+    null_check_patterns: ["=== null", "=== undefined", "== null"]
+    logical_operators: ["&&", "||", "!"]
+  
+  typescript:
+    early_return_keywords: ["return", "throw", "break", "continue"]
+    null_check_patterns: ["=== null", "=== undefined", "== null"]
+    logical_operators: ["&&", "||", "!"]
+    type_guards: true
+  
+  python:
+    early_return_keywords: ["return", "raise", "break", "continue"]
+    null_check_patterns: ["is None", "== None"]
+    logical_operators: ["and", "or", "not"]
+    truthiness_patterns: ["if not", "if"]
+  
+  rust:
+    early_return_keywords: ["return", "break", "continue"]
+    null_check_patterns: ["is_none()", "is_some()"]
+    logical_operators: ["&&", "||", "!"]
+    option_patterns: ["Option<T>", "Some", "None"]
+    result_patterns: ["Result<T, E>", "Ok", "Err"]
+  
+  go:
+    early_return_keywords: ["return", "break", "continue"]
+    null_check_patterns: ["== nil", "!= nil"]
+    logical_operators: ["&&", "||", "!"]
+    error_patterns: ["err != nil", "err == nil"]
+  
+  java:
+    early_return_keywords: ["return", "throw", "break", "continue"]
+    null_check_patterns: ["== null", "!= null"]
+    logical_operators: ["&&", "||", "!"]
+    optional_patterns: ["Optional.empty()", "Optional.isPresent()"]
+
+# Preconditions to check before applying
+preconditions:
+  - !no_side_effects_in
+    expression: $EARLY_RETURN
+  - !valid_scope
+    pattern: $MAIN_LOGIC
+
+# Examples for documentation
+examples:
+  - description: "Basic if-else to guard clause"
+    before: |
+      function processUser(user) {
+        if (user !== null) {
+          console.log(user.name);
+          return user.id;
+        } else {
+          return null;
+        }
+      }
+    after: |
+      function processUser(user) {
+        if (user === null) {
+          return null;
+        }
+        console.log(user.name);
+        return user.id;
+      }
+  
+  - description: "Multiple condition guard"
+    before: |
+      function calculateDiscount(price, coupon) {
+        if (price > 0 && coupon.isValid) {
+          const discount = price * coupon.rate;
+          return Math.min(discount, coupon.maxDiscount);
+        } else {
+          return 0;
+        }
+      }
+    after: |
+      function calculateDiscount(price, coupon) {
+        if (price <= 0 || !coupon.isValid) {
+          return 0;
+        }
+        const discount = price * coupon.rate;
+        return Math.min(discount, coupon.maxDiscount);
+      }
+  
+  - description: "Array length check"
+    before: |
+      function processItems(items) {
+        if (items.length > 0) {
+          return items.map(item => item.process());
+        } else {
+          return [];
+        }
+      }
+    after: |
+      function processItems(items) {
+        if (items.length === 0) {
+          return [];
+        }
+        return items.map(item => item.process());
+      }
+  
+  - description: "Nested conditions to multiple guards"
+    before: |
+      function authenticate(username, password) {
+        if (username) {
+          if (password) {
+            return validateCredentials(username, password);
+          } else {
+            throw new Error('Password required');
+          }
+        } else {
+          throw new Error('Username required');
+        }
+      }
+    after: |
+      function authenticate(username, password) {
+        if (!username) {
+          throw new Error('Username required');
+        }
+        if (!password) {
+          throw new Error('Password required');
+        }
+        return validateCredentials(username, password);
+      }
+
+  - description: "Python example with None check"
+    language: python
+    before: |
+      def process_data(data):
+          if data is not None:
+              result = data.transform()
+              return result.value
+          else:
+              return None
+    after: |
+      def process_data(data):
+          if data is None:
+              return None
+          result = data.transform()
+          return result.value
+
+  - description: "Rust example with Option handling"
+    language: rust
+    before: |
+      fn get_user_name(user: Option<User>) -> String {
+          if let Some(u) = user {
+              format!("Hello, {}", u.name)
+          } else {
+              String::from("Guest")
+          }
+      }
+    after: |
+      fn get_user_name(user: Option<User>) -> String {
+          if user.is_none() {
+              return String::from("Guest");
+          }
+          let u = user.unwrap();
+          format!("Hello, {}", u.name)
+      }
+
+  - description: "Go example with error handling"
+    language: go
+    before: |
+      func processFile(filename string) ([]byte, error) {
+          if filename != "" {
+              data, err := ioutil.ReadFile(filename)
+              if err == nil {
+                  return data, nil
+              } else {
+                  return nil, err
+              }
+          } else {
+              return nil, fmt.Errorf("filename cannot be empty")
+          }
+      }
+    after: |
+      func processFile(filename string) ([]byte, error) {
+          if filename == "" {
+              return nil, fmt.Errorf("filename cannot be empty")
+          }
+          data, err := ioutil.ReadFile(filename)
+          if err != nil {
+              return nil, err
+          }
+          return data, nil
+      }

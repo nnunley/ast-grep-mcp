@@ -1,0 +1,342 @@
+# Consolidate Duplicate Conditional Fragments Refactoring
+# Move duplicate code outside of conditional branches to reduce duplication
+
+id: consolidate_duplicate_conditional
+name: Consolidate Duplicate Conditional Fragments
+category: simplifying_conditionals
+description: Move duplicate code outside of conditional branches to reduce code duplication and improve maintainability
+supported_languages: 
+  - javascript
+  - typescript
+  - python
+  - rust
+  - go
+  - java
+complexity: simple
+
+# Main pattern for if-else with duplicate code
+pattern:
+  match: |
+    if ($CONDITION) {
+      $DUPLICATE_BEFORE
+      $UNIQUE1
+      $DUPLICATE_AFTER
+    } else {
+      $DUPLICATE_BEFORE
+      $UNIQUE2
+      $DUPLICATE_AFTER
+    }
+  constraints:
+    - kind:
+        kinds: ["if_statement"]
+
+transform:
+  replace: |
+    $DUPLICATE_BEFORE
+    if ($CONDITION) {
+      $UNIQUE1
+    } else {
+      $UNIQUE2
+    }
+    $DUPLICATE_AFTER
+
+# variables:
+#   extract_from_pattern:
+#     - $DUPLICATE_BEFORE
+#     - $DUPLICATE_AFTER
+#     - $UNIQUE1
+#     - $UNIQUE2
+#     - $CONDITION
+#   parameters: "none"
+#   return_values: "none"
+
+# Variants for different conditional patterns
+variants:
+  # Multiple else-if branches with duplicates
+  - id: consolidate_else_if_chain
+    pattern:
+      match: |
+        if ($CONDITION1) {
+          $DUPLICATE_BEFORE
+          $UNIQUE1
+          $DUPLICATE_AFTER
+        } else if ($CONDITION2) {
+          $DUPLICATE_BEFORE
+          $UNIQUE2
+          $DUPLICATE_AFTER
+        } else {
+          $DUPLICATE_BEFORE
+          $UNIQUE3
+          $DUPLICATE_AFTER
+        }
+    transform:
+      replace: |
+        $DUPLICATE_BEFORE
+        if ($CONDITION1) {
+          $UNIQUE1
+        } else if ($CONDITION2) {
+          $UNIQUE2
+        } else {
+          $UNIQUE3
+        }
+        $DUPLICATE_AFTER
+
+  # Switch statement with duplicate code
+  - id: consolidate_switch_duplicates
+    pattern:
+      match: |
+        switch ($EXPR) {
+          case $CASE1:
+            $DUPLICATE_BEFORE
+            $UNIQUE1
+            $DUPLICATE_AFTER
+            break;
+          case $CASE2:
+            $DUPLICATE_BEFORE
+            $UNIQUE2
+            $DUPLICATE_AFTER
+            break;
+          default:
+            $DUPLICATE_BEFORE
+            $UNIQUE3
+            $DUPLICATE_AFTER
+            break;
+        }
+    transform:
+      replace: |
+        $DUPLICATE_BEFORE
+        switch ($EXPR) {
+          case $CASE1:
+            $UNIQUE1
+            break;
+          case $CASE2:
+            $UNIQUE2
+            break;
+          default:
+            $UNIQUE3
+            break;
+        }
+        $DUPLICATE_AFTER
+
+  # Ternary operator with duplicates (complex case)
+  - id: consolidate_ternary_duplicates
+    pattern:
+      match: |
+        $DUPLICATE_BEFORE
+        $VAR = $CONDITION ? ($DUPLICATE_EXPR, $UNIQUE1) : ($DUPLICATE_EXPR, $UNIQUE2)
+        $DUPLICATE_AFTER
+    transform:
+      replace: |
+        $DUPLICATE_BEFORE
+        $DUPLICATE_EXPR
+        $VAR = $CONDITION ? $UNIQUE1 : $UNIQUE2
+        $DUPLICATE_AFTER
+
+  # Only duplicate before block
+  - id: consolidate_before_only
+    pattern:
+      match: |
+        if ($CONDITION) {
+          $DUPLICATE_BEFORE
+          $UNIQUE1
+        } else {
+          $DUPLICATE_BEFORE
+          $UNIQUE2
+        }
+    transform:
+      replace: |
+        $DUPLICATE_BEFORE
+        if ($CONDITION) {
+          $UNIQUE1
+        } else {
+          $UNIQUE2
+        }
+
+  # Only duplicate after block
+  - id: consolidate_after_only
+    pattern:
+      match: |
+        if ($CONDITION) {
+          $UNIQUE1
+          $DUPLICATE_AFTER
+        } else {
+          $UNIQUE2
+          $DUPLICATE_AFTER
+        }
+    transform:
+      replace: |
+        if ($CONDITION) {
+          $UNIQUE1
+        } else {
+          $UNIQUE2
+        }
+        $DUPLICATE_AFTER
+
+# Language-specific configurations
+language_config:
+  javascript:
+    block_delimiters: "braces"
+    supports_switch: true
+    supports_ternary: true
+  
+  typescript:
+    block_delimiters: "braces"
+    supports_switch: true
+    supports_ternary: true
+    type_preservation: true
+  
+  python:
+    block_delimiters: "indentation"
+    supports_switch: false  # No switch statement
+    supports_ternary: true
+    elif_syntax: true
+  
+  rust:
+    block_delimiters: "braces"
+    supports_switch: false  # Uses match instead
+    supports_ternary: false
+    match_syntax: true
+  
+  go:
+    block_delimiters: "braces"
+    supports_switch: true
+    supports_ternary: false
+    fallthrough_explicit: true
+  
+  java:
+    block_delimiters: "braces"
+    supports_switch: true
+    supports_ternary: true
+    enhanced_switch: true
+
+# Preconditions to check before applying
+preconditions:
+  - !no_side_effects_in
+    expression: $DUPLICATE_BEFORE
+  - !no_side_effects_in
+    expression: $DUPLICATE_AFTER
+  - !valid_scope
+    pattern: $DUPLICATE_BEFORE
+
+# Examples for documentation
+examples:
+  - description: "Basic if-else with duplicate setup and cleanup"
+    before: |
+      if (user.isActive) {
+        logger.info("Processing user action");
+        processActiveUser(user);
+        logger.info("Action completed");
+      } else {
+        logger.info("Processing user action");
+        processInactiveUser(user);
+        logger.info("Action completed");
+      }
+    after: |
+      logger.info("Processing user action");
+      if (user.isActive) {
+        processActiveUser(user);
+      } else {
+        processInactiveUser(user);
+      }
+      logger.info("Action completed");
+  
+  - description: "Multiple else-if with duplicate validation"
+    before: |
+      if (level === 'debug') {
+        validateRequest(req);
+        logDebug(message);
+        auditLog(req, 'debug');
+      } else if (level === 'info') {
+        validateRequest(req);
+        logInfo(message);
+        auditLog(req, 'info');
+      } else {
+        validateRequest(req);
+        logError(message);
+        auditLog(req, 'error');
+      }
+    after: |
+      validateRequest(req);
+      if (level === 'debug') {
+        logDebug(message);
+      } else if (level === 'info') {
+        logInfo(message);
+      } else {
+        logError(message);
+      }
+      auditLog(req, level);
+  
+  - description: "Switch statement with duplicate initialization"
+    before: |
+      switch (action.type) {
+        case 'CREATE':
+          validatePayload(action.payload);
+          createEntity(action.payload);
+          updateTimestamp();
+          break;
+        case 'UPDATE':
+          validatePayload(action.payload);
+          updateEntity(action.payload);
+          updateTimestamp();
+          break;
+        case 'DELETE':
+          validatePayload(action.payload);
+          deleteEntity(action.payload);
+          updateTimestamp();
+          break;
+      }
+    after: |
+      validatePayload(action.payload);
+      switch (action.type) {
+        case 'CREATE':
+          createEntity(action.payload);
+          break;
+        case 'UPDATE':
+          updateEntity(action.payload);
+          break;
+        case 'DELETE':
+          deleteEntity(action.payload);
+          break;
+      }
+      updateTimestamp();
+  
+  - description: "Only duplicate before block"
+    before: |
+      if (isValid) {
+        initializeContext();
+        handleValidRequest();
+      } else {
+        initializeContext();
+        handleInvalidRequest();
+      }
+    after: |
+      initializeContext();
+      if (isValid) {
+        handleValidRequest();
+      } else {
+        handleInvalidRequest();
+      }
+  
+  - description: "Python elif syntax"
+    before: |
+      if status == 'pending':
+          log_action('Processing request')
+          handle_pending_request()
+          log_action('Request processed')
+      elif status == 'approved':
+          log_action('Processing request')
+          handle_approved_request()
+          log_action('Request processed')
+      else:
+          log_action('Processing request')
+          handle_rejected_request()
+          log_action('Request processed')
+    after: |
+      log_action('Processing request')
+      if status == 'pending':
+          handle_pending_request()
+      elif status == 'approved':
+          handle_approved_request()
+      else:
+          handle_rejected_request()
+      log_action('Request processed')

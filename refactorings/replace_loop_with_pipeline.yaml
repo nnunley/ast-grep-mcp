@@ -1,0 +1,243 @@
+# Replace Loop with Pipeline Refactoring
+# Transform imperative loops into functional pipelines using filter/map/reduce
+
+id: replace_loop_with_pipeline
+name: Replace Loop with Pipeline
+category: composing_methods
+description: Replace imperative loops with functional pipeline operations for better readability and functional style
+supported_languages: 
+  - javascript
+  - typescript
+  - python
+complexity: moderate
+
+# Main pattern for filter-map-reduce transformation
+pattern:
+  match: |
+    $RESULT = $INIT;
+    for ($ITEM of $ITEMS) {
+      if ($FILTER_CONDITION) {
+        $RESULT = $ACCUMULATOR;
+      }
+    }
+  constraints:
+    - inside:
+        context: "block_statement"
+    - kind:
+        kinds: ["for_in_statement", "for_of_statement"]
+
+transform:
+  replace: |
+    $RESULT = $ITEMS
+      .filter($ITEM => $FILTER_CONDITION)
+      .reduce((acc, $ITEM) => $ACCUMULATOR, $INIT);
+
+# variables:
+#   extract_from_pattern:
+#     - $ITEMS
+#     - $ITEM
+#     - $FILTER_CONDITION
+#     - $ACCUMULATOR
+#     - $INIT
+#     - $RESULT
+#   parameters: "none"
+#   return_values: "none"
+
+# Variants for different pipeline patterns
+variants:
+  # Simple filter operation
+  - id: filter_only
+    pattern:
+      match: |
+        $RESULT = [];
+        for ($ITEM of $ITEMS) {
+          if ($CONDITION) {
+            $RESULT.push($ITEM);
+          }
+        }
+    transform:
+      replace: |
+        $RESULT = $ITEMS.filter($ITEM => $CONDITION);
+
+  # Simple map operation
+  - id: map_only
+    pattern:
+      match: |
+        $RESULT = [];
+        for ($ITEM of $ITEMS) {
+          $RESULT.push($TRANSFORM);
+        }
+    transform:
+      replace: |
+        $RESULT = $ITEMS.map($ITEM => $TRANSFORM);
+
+  # Filter then map
+  - id: filter_map
+    pattern:
+      match: |
+        $RESULT = [];
+        for ($ITEM of $ITEMS) {
+          if ($CONDITION) {
+            $RESULT.push($TRANSFORM);
+          }
+        }
+    transform:
+      replace: |
+        $RESULT = $ITEMS
+          .filter($ITEM => $CONDITION)
+          .map($ITEM => $TRANSFORM);
+
+  # Map then reduce
+  - id: map_reduce
+    pattern:
+      match: |
+        $RESULT = $INIT;
+        for ($ITEM of $ITEMS) {
+          const $TEMP = $TRANSFORM;
+          $RESULT = $ACCUMULATOR;
+        }
+    transform:
+      replace: |
+        $RESULT = $ITEMS
+          .map($ITEM => $TRANSFORM)
+          .reduce((acc, $TEMP) => $ACCUMULATOR, $INIT);
+
+  # Reduce only
+  - id: reduce_only
+    pattern:
+      match: |
+        $RESULT = $INIT;
+        for ($ITEM of $ITEMS) {
+          $RESULT = $ACCUMULATOR;
+        }
+    transform:
+      replace: |
+        $RESULT = $ITEMS.reduce((acc, $ITEM) => $ACCUMULATOR, $INIT);
+
+  # Python list comprehension (filter-map)
+  - id: python_filter_map
+    pattern:
+      match: |
+        $RESULT = []
+        for $ITEM in $ITEMS:
+            if $CONDITION:
+                $RESULT.append($TRANSFORM)
+    transform:
+      replace: |
+        $RESULT = [$TRANSFORM for $ITEM in $ITEMS if $CONDITION]
+    language: python
+
+  # Python generator expression for reduce
+  - id: python_reduce
+    pattern:
+      match: |
+        $RESULT = $INIT
+        for $ITEM in $ITEMS:
+            $RESULT = $ACCUMULATOR
+    transform:
+      replace: |
+        from functools import reduce
+        $RESULT = reduce(lambda acc, $ITEM: $ACCUMULATOR, $ITEMS, $INIT)
+    language: python
+
+# Language-specific configurations
+language_config:
+  javascript:
+    pipeline_methods: ["filter", "map", "reduce", "forEach", "find", "some", "every"]
+    arrow_functions: true
+    method_chaining: true
+    
+  typescript:
+    pipeline_methods: ["filter", "map", "reduce", "forEach", "find", "some", "every"]
+    arrow_functions: true
+    method_chaining: true
+    type_inference: true
+    generic_types: true
+    
+  python:
+    pipeline_methods: ["filter", "map", "reduce"]
+    list_comprehensions: true
+    generator_expressions: true
+    functional_imports: ["functools.reduce"]
+
+# Preconditions to check before applying
+preconditions:
+  - !no_side_effects_in
+    expression: $ACCUMULATOR
+  - !valid_scope
+    pattern: $ITEMS
+
+# Examples for documentation
+examples:
+  - description: "Transform filter-map loop to pipeline"
+    before: |
+      const results = [];
+      for (const item of items) {
+        if (item.active) {
+          results.push(item.name.toUpperCase());
+        }
+      }
+    after: |
+      const results = items
+        .filter(item => item.active)
+        .map(item => item.name.toUpperCase());
+
+  - description: "Transform accumulation loop to reduce"
+    before: |
+      let total = 0;
+      for (const item of items) {
+        total += item.price;
+      }
+    after: |
+      const total = items.reduce((acc, item) => acc + item.price, 0);
+
+  - description: "Transform complex filter-map-reduce"
+    before: |
+      let sum = 0;
+      for (const item of items) {
+        if (item.category === 'premium') {
+          const discountedPrice = item.price * 0.9;
+          sum += discountedPrice;
+        }
+      }
+    after: |
+      const sum = items
+        .filter(item => item.category === 'premium')
+        .map(item => item.price * 0.9)
+        .reduce((acc, price) => acc + price, 0);
+
+  - description: "Python list comprehension transformation"
+    before: |
+      results = []
+      for item in items:
+          if item.active:
+              results.append(item.name.upper())
+    after: |
+      results = [item.name.upper() for item in items if item.active]
+
+  - description: "Python reduce transformation"
+    before: |
+      total = 0
+      for item in items:
+          total += item.price
+    after: |
+      from functools import reduce
+      total = reduce(lambda acc, item: acc + item.price, items, 0)
+
+  - description: "Multiple array building to chained operations"
+    before: |
+      const filtered = [];
+      for (const user of users) {
+        if (user.age >= 18) {
+          filtered.push(user);
+        }
+      }
+      
+      const names = [];
+      for (const user of filtered) {
+        names.push(user.name);
+      }
+    after: |
+      const names = users
+        .filter(user => user.age >= 18)
+        .map(user => user.name);
